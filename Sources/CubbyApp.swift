@@ -30,40 +30,100 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-struct RunningApp: Identifiable {
-    let id: Int
+struct AppEntry: Identifiable {
+    let id: String          // bundle id, fallback path
     let name: String
     let icon: NSImage?
+    let url: URL?           // .app bundle URL for launch
+    let pid: pid_t?
+    var isRunning: Bool { pid != nil }
 }
 
 struct ContentView: View {
     private let minRowHeight: CGFloat = 40
 
-    @State private var apps: [RunningApp] = []
-    @State private var hoveredAppID: Int? = nil
-    @State private var hoveredQuitID: Int? = nil
+    @State private var runningApps: [AppEntry] = []
+    @State private var installedApps: [AppEntry] = []
+    @State private var hoveredAppID: String? = nil
+    @State private var hoveredQuitID: String? = nil
     @State private var cancellables = Set<AnyCancellable>()
     @State private var query: String = ""
     @FocusState private var isSearchFocused: Bool
 
-    private func refreshApps() {
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var displayedApps: [AppEntry] {
+        if trimmedQuery.isEmpty { return runningApps }
+        return installedApps.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmedQuery)
+                || $0.id.localizedCaseInsensitiveContains(trimmedQuery)
+        }
+    }
+
+    private func refreshRunningApps() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
-        apps = NSWorkspace.shared.runningApplications
+        runningApps = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.processIdentifier != selfPid }
-            .compactMap { app -> RunningApp? in
+            .compactMap { app -> AppEntry? in
                 guard let name = app.localizedName else { return nil }
-                return RunningApp(id: Int(app.processIdentifier), name: name, icon: app.icon)
+                let id = app.bundleIdentifier ?? "pid-\(app.processIdentifier)"
+                return AppEntry(id: id, name: name, icon: app.icon,
+                                url: app.bundleURL, pid: app.processIdentifier)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    private func quitApp(_ app: RunningApp) {
-        if let running = NSRunningApplication(processIdentifier: pid_t(app.id)) {
-            // Graceful quit: app's own save/cancel flow still runs (same as ⌘Q)
+    private func loadInstalledApps() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            let dirs = [
+                "/Applications",
+                "/System/Applications",
+                "/System/Applications/Utilities",
+                NSHomeDirectory() + "/Applications"
+            ]
+            var seen = Set<String>()
+            var result: [AppEntry] = []
+            for d in dirs {
+                guard let urls = try? fm.contentsOfDirectory(
+                    at: URL(fileURLWithPath: d),
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
+                for u in urls where u.pathExtension == "app" {
+                    let bundle = Bundle(url: u)
+                    let name = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                        ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                        ?? u.deletingPathExtension().lastPathComponent
+                    let bid = bundle?.bundleIdentifier ?? u.path
+                    if seen.contains(bid) { continue }
+                    seen.insert(bid)
+                    result.append(AppEntry(id: bid, name: name,
+                                           icon: NSWorkspace.shared.icon(forFile: u.path),
+                                           url: u, pid: nil))
+                }
+            }
+            let sorted = result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            DispatchQueue.main.async { installedApps = sorted }
+        }
+    }
+
+    private func openApp(_ app: AppEntry) {
+        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
+            running.activate(options: [.activateAllWindows])
+        } else if let url = app.url {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func quitApp(_ app: AppEntry) {
+        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
             running.terminate()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { refreshApps() }
-        refreshApps()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { refreshRunningApps() }
+        refreshRunningApps()
     }
 
     var body: some View {
@@ -101,90 +161,104 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.15), value: isSearchFocused)
 
             GeometryReader { geo in
-            let rowCount = apps.count
-            // Viewport must show whole rows only: n = rows that fit at min height
-            let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
-            let rowHeight = geo.size.height / CGFloat(fitCount)
+                let rowCount = displayedApps.count
+                let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
+                let rowHeight = geo.size.height / CGFloat(fitCount)
 
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(apps) { app in
-                        HStack(spacing: 10) {
-                            if let icon = app.icon {
-                                Image(nsImage: icon)
-                                    .resizable()
-                                    .frame(width: min(max(rowHeight * 0.38, 22), 54),
-                                           height: min(max(rowHeight * 0.38, 22), 54))
+                if displayedApps.isEmpty {
+                    VStack {
+                        Spacer()
+                        Text(trimmedQuery.isEmpty ? "No running apps" : "No apps found")
+                            .foregroundStyle(.white.opacity(0.4))
+                            .font(.system(size: 13))
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(displayedApps) { app in
+                                HStack(spacing: 10) {
+                                    if let icon = app.icon {
+                                        Image(nsImage: icon)
+                                            .resizable()
+                                            .frame(width: min(max(rowHeight * 0.38, 22), 54),
+                                                   height: min(max(rowHeight * 0.38, 22), 54))
+                                    }
+                                    Text(app.name)
+                                        .foregroundStyle(.white.opacity(0.85))
+                                        .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
+                                    Spacer()
+                                    if app.isRunning {
+                                        Button {
+                                            quitApp(app)
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                                                .foregroundStyle(.white.opacity(0.7))
+                                                .frame(width: min(max(rowHeight * 0.3, 24), 32),
+                                                       height: min(max(rowHeight * 0.3, 24), 32))
+                                                .background(Circle().fill(Color.white.opacity(0.15)))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .onHover { hovering in
+                                            hoveredQuitID = hovering ? app.id : nil
+                                        }
+                                        .background(
+                                            Circle().fill(hoveredQuitID == app.id
+                                                          ? Color.red.opacity(0.8)
+                                                          : Color.white.opacity(0.15))
+                                        )
+                                        .opacity(hoveredAppID == app.id ? 1 : 0)
+                                        .help("Quit \(app.name)")
+                                    }
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(height: rowHeight)
+                                .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
+                                .contentShape(Rectangle())
+                                .onTapGesture { openApp(app) }
+                                .onHover { hovering in
+                                    hoveredAppID = hovering ? app.id : nil
+                                }
+                                .contextMenu {
+                                    Button("Open \(app.name)") { openApp(app) }
+                                    if app.isRunning {
+                                        Button("Quit \(app.name)") { quitApp(app) }
+                                    }
+                                }
+                                .overlay(alignment: .bottom) {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.12))
+                                        .frame(height: 1)
+                                }
+                                .overlay(alignment: .top) {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.12))
+                                        .frame(height: 1)
+                                }
                             }
-                            Text(app.name)
-                                .foregroundStyle(.white.opacity(0.85))
-                                .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
-                            Spacer()
-                            // Quit button, revealed on hover
-                            Button {
-                                quitApp(app)
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.7))
-                                    .frame(width: min(max(rowHeight * 0.3, 24), 32),
-                                           height: min(max(rowHeight * 0.3, 24), 32))
-                                    .background(Circle().fill(Color.white.opacity(0.15)))
-                            }
-                            .buttonStyle(.plain)
-                            .onHover { hovering in
-                                hoveredQuitID = hovering ? app.id : nil
-                            }
-                            .background(
-                                Circle().fill(hoveredQuitID == app.id
-                                              ? Color.red.opacity(0.8)
-                                              : Color.white.opacity(0.15))
-                            )
-                            .opacity(hoveredAppID == app.id ? 1 : 0)
-                            .help("Quit \(app.name)")
                         }
-                        .padding(.horizontal, 14)
-                        .frame(height: rowHeight)
-                        .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
-                        .contentShape(Rectangle())
-                        .onHover { hovering in
-                            hoveredAppID = hovering ? app.id : nil
-                        }
-                        .contextMenu {
-                            Button("Quit \(app.name)") { quitApp(app) }
-                        }
-                        .overlay(alignment: .bottom) {
-                            Rectangle()
-                                .fill(Color.white.opacity(0.12))
-                                .frame(height: 1)
-                        }
-                        .overlay(alignment: .top) {
-                            Rectangle()
-                                .fill(Color.white.opacity(0.12))
-                                .frame(height: 1)
-                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(height: 1)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .overlay(alignment: .bottom) {
-                // Bottom of last visible row always sits at viewport end
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(height: 1)
-            }
             }
         }
         .background(Color.black)
         .onAppear {
-            refreshApps()
-            // React to app launches and quits while Cubby runs
+            refreshRunningApps()
+            loadInstalledApps()
             NSWorkspace.shared.notificationCenter
                 .publisher(for: NSWorkspace.didLaunchApplicationNotification)
                 .merge(with: NSWorkspace.shared.notificationCenter
                     .publisher(for: NSWorkspace.didTerminateApplicationNotification))
                 .receive(on: DispatchQueue.main)
-                .sink { _ in refreshApps() }
+                .sink { _ in refreshRunningApps() }
                 .store(in: &cancellables)
         }
     }
