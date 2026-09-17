@@ -39,6 +39,7 @@ struct ContentView: View {
     private let minRowHeight: CGFloat = 40
 
     @State private var apps: [RunningApp] = []
+    @State private var hoveredAppID: Int? = nil
 
     private func refreshApps() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
@@ -49,6 +50,15 @@ struct ContentView: View {
                 return RunningApp(id: Int(app.processIdentifier), name: name, icon: app.icon)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func quitApp(_ app: RunningApp) {
+        if let running = NSRunningApplication(processIdentifier: pid_t(app.id)) {
+            // Graceful quit: app's own save/cancel flow still runs (same as ⌘Q)
+            running.terminate()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { refreshApps() }
+        refreshApps()
     }
 
     var body: some View {
@@ -72,9 +82,31 @@ struct ContentView: View {
                                 .foregroundStyle(.white.opacity(0.85))
                                 .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
                             Spacer()
+                            // Quit button, revealed on hover
+                            Button {
+                                quitApp(app)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .frame(width: min(max(rowHeight * 0.3, 24), 32),
+                                           height: min(max(rowHeight * 0.3, 24), 32))
+                                    .background(Circle().fill(Color.white.opacity(0.15)))
+                            }
+                            .buttonStyle(.plain)
+                            .opacity(hoveredAppID == app.id ? 1 : 0)
+                            .help("Quit \(app.name)")
                         }
                         .padding(.horizontal, 14)
                         .frame(height: rowHeight)
+                        .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            hoveredAppID = hovering ? app.id : nil
+                        }
+                        .contextMenu {
+                            Button("Quit \(app.name)") { quitApp(app) }
+                        }
                         .overlay(alignment: .bottom) {
                             Rectangle()
                                 .fill(Color.white.opacity(0.12))
