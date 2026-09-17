@@ -67,6 +67,27 @@ struct ContentView: View {
         }
     }
 
+    private var runningIDs: Set<String> {
+        Set(runningApps.map(\.id))
+    }
+
+    private func highlightedText(_ name: String, query q: String) -> AttributedString {
+        var attr = AttributedString(name)
+        attr.foregroundColor = .white.opacity(0.85)
+        guard !q.isEmpty else { return attr }
+        var index = name.startIndex
+        while index < name.endIndex {
+            guard let r = name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], range: index..<name.endIndex) else { break }
+            let lower = name.distance(from: name.startIndex, to: r.lowerBound)
+            let upper = name.distance(from: name.startIndex, to: r.upperBound)
+            if let ar = Range(NSRange(location: lower, length: upper - lower), in: attr) {
+                attr[ar].foregroundColor = .white
+            }
+            index = r.upperBound
+        }
+        return attr
+    }
+
     private func refreshRunningApps() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
         runningApps = NSWorkspace.shared.runningApplications
@@ -166,9 +187,10 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.15), value: isSearchFocused)
 
             GeometryReader { geo in
+                let searching = !trimmedQuery.isEmpty
                 let rowCount = displayedApps.count
                 let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
-                let rowHeight = geo.size.height / CGFloat(fitCount)
+                let rowHeight: CGFloat = searching ? minRowHeight : geo.size.height / CGFloat(fitCount)
 
                 if displayedApps.isEmpty {
                     VStack {
@@ -190,9 +212,13 @@ struct ContentView: View {
                                             .frame(width: min(max(rowHeight * 0.38, 22), 54),
                                                    height: min(max(rowHeight * 0.38, 22), 54))
                                     }
-                                    Text(app.name)
-                                        .foregroundStyle(.white.opacity(0.85))
+                                    Text(highlightedText(app.name, query: trimmedQuery))
                                         .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
+                                    if searching && runningIDs.contains(app.id) {
+                                        Circle()
+                                            .fill(Color.green.opacity(0.9))
+                                            .frame(width: 6, height: 6)
+                                    }
                                     Spacer()
                                     if app.isRunning {
                                         Button {
@@ -247,9 +273,11 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(height: 1)
+                        if !searching {
+                            Rectangle()
+                                .fill(Color.white.opacity(0.12))
+                                .frame(height: 1)
+                        }
                     }
                 }
             }
