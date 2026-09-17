@@ -195,7 +195,7 @@ struct ContentView: View {
     private func usageView(_ u: (cpu: Double, memMB: Double), rowHeight: CGFloat) -> some View {
         let size = min(max(rowHeight * 0.18, 10), 13)
         let iconSize = min(max(rowHeight * 0.16, 9), 11)
-        return HStack(spacing: 10) {
+        return HStack(spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
                     .font(.system(size: iconSize, weight: .medium))
@@ -268,8 +268,8 @@ struct ContentView: View {
             Image(systemName: "xmark")
                 .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
-                .frame(width: min(max(rowHeight * 0.3, 24), 32),
-                       height: min(max(rowHeight * 0.3, 24), 32))
+                .frame(width: min(max(rowHeight * 0.28, 22), 28),
+                       height: min(max(rowHeight * 0.28, 22), 28))
                 .background(Circle().fill(Color.white.opacity(0.15)))
         }
         .buttonStyle(.plain)
@@ -293,8 +293,8 @@ struct ContentView: View {
             Image(systemName: "arrow.up.right")
                 .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
-                .frame(width: min(max(rowHeight * 0.3, 24), 32),
-                       height: min(max(rowHeight * 0.3, 24), 32))
+                .frame(width: min(max(rowHeight * 0.28, 22), 28),
+                       height: min(max(rowHeight * 0.28, 22), 28))
                 .background(Circle().fill(Color.white.opacity(0.15)))
         }
         .buttonStyle(.plain)
@@ -367,13 +367,13 @@ struct ContentView: View {
                                     if let icon = app.icon {
                                         Image(nsImage: icon)
                                             .resizable()
-                                            .frame(width: min(max(rowHeight * 0.34, 22), 44),
-                                                   height: min(max(rowHeight * 0.34, 22), 44))
+                                            .frame(width: min(max(rowHeight * 0.32, 20), 38),
+                                                   height: min(max(rowHeight * 0.32, 20), 38))
                                     }
                                     Text(highlightedText(app.name, query: trimmedQuery))
-                                        .font(.system(size: min(max(rowHeight * 0.24, 13), 19), weight: .regular))
+                                        .font(.system(size: 15, weight: .regular))
                                         .lineLimit(1)
-                                        .minimumScaleFactor(0.5)
+                                        .layoutPriority(1)
                                     if searching && runningIDs.contains(app.id) {
                                         Circle()
                                             .fill(Color.green.opacity(0.9))
@@ -390,7 +390,7 @@ struct ContentView: View {
                                         openButton(app, rowHeight: rowHeight)
                                     }
                                 }
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal, 12)
                                 .frame(height: rowHeight)
                                 .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
                                 .contentShape(Rectangle())
