@@ -3,6 +3,7 @@ import AppKit
 import Combine
 
 private let PROC_PIDTASKINFO: Int32 = 4
+private let RUSAGE_INFO_V2: Int32 = 2
 
 private struct ProcTaskInfo {
     var pti_virtual_size: UInt64 = 0
@@ -27,6 +28,9 @@ private struct ProcTaskInfo {
 
 @_silgen_name("proc_pidinfo")
 private func proc_pidinfo(_ pid: Int32, _ flavor: Int32, _ arg: UInt64, _ buffer: UnsafeMutableRawPointer?, _ buffersize: Int32) -> Int32
+
+@_silgen_name("proc_pid_rusage")
+private func proc_pid_rusage(_ pid: Int32, _ flavor: Int32, _ buffer: UnsafeMutableRawPointer?) -> Int32
 
 @main
 struct CubbyApp: App {
@@ -198,7 +202,12 @@ struct ContentView: View {
                     }
                 }
                 Self.cpuSamples[Int(pid)] = (total, now)
-                let memMB = Double(info.pti_resident_size) / (1024.0 * 1024.0)
+                var physFootprint: UInt64 = 0
+                var rusageBuf = [UInt8](repeating: 0, count: 512)
+                if proc_pid_rusage(pid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
+                    physFootprint = rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: 72, as: UInt64.self) }
+                }
+                let memMB = Double(physFootprint) / (1024.0 * 1024.0)
                 snapshot[Int(pid)] = (cpu, memMB)
             }
             DispatchQueue.main.async { usage = snapshot }
