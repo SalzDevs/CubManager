@@ -2,6 +2,32 @@ import SwiftUI
 import AppKit
 import Combine
 
+private let PROC_PIDTASKINFO: Int32 = 4
+
+private struct ProcTaskInfo {
+    var pti_virtual_size: UInt64 = 0
+    var pti_resident_size: UInt64 = 0
+    var pti_total_user: UInt64 = 0
+    var pti_total_system: UInt64 = 0
+    var pti_threads_user: UInt64 = 0
+    var pti_threads_system: UInt64 = 0
+    var pti_policy: Int32 = 0
+    var pti_faults: Int32 = 0
+    var pti_pageins: Int32 = 0
+    var pti_cow_faults: Int32 = 0
+    var pti_messages_sent: Int32 = 0
+    var pti_messages_received: Int32 = 0
+    var pti_syscalls_mach: Int32 = 0
+    var pti_syscalls_unix: Int32 = 0
+    var pti_csw: Int32 = 0
+    var pti_threadnum: Int32 = 0
+    var pti_numrunning: Int32 = 0
+    var pti_priority: Int32 = 0
+}
+
+@_silgen_name("proc_pidinfo")
+private func proc_pidinfo(_ pid: Int32, _ flavor: Int32, _ arg: UInt64, _ buffer: UnsafeMutableRawPointer?, _ buffersize: Int32) -> Int32
+
 @main
 struct CubbyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -46,6 +72,8 @@ struct AppEntry: Identifiable {
 
 struct ContentView: View {
     private let minRowHeight: CGFloat = 40
+    private static let usageQueue = DispatchQueue(label: "cubby.usage")
+    private static var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
 
     @State private var runningApps: [AppEntry] = []
     @State private var installedApps: [AppEntry] = []
@@ -151,31 +179,28 @@ struct ContentView: View {
         return String(format: "%.1f%% · %@", u.cpu, mem)
     }
 
-    private func fetchUsage() -> [Int: (cpu: Double, memMB: Double)] {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/ps")
-        p.arguments = ["-axo", "pid=,%cpu=,rss="]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        do { try p.run() } catch { return [:] }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        var result: [Int: (Double, Double)] = [:]
-        guard let str = String(data: data, encoding: .utf8) else { return result }
-        for line in str.split(separator: "\n") {
-            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-            guard parts.count >= 3,
-                  let pid = Int(parts[0]),
-                  let cpu = Double(parts[1]),
-                  let rss = Double(parts[2]) else { continue }
-            result[pid] = (cpu, rss / 1024.0)
-        }
-        return result
-    }
-
     private func refreshUsage() {
-        DispatchQueue.global(qos: .utility).async {
-            let snapshot = fetchUsage()
+        let pids = runningApps.compactMap { $0.pid }
+        Self.usageQueue.async {
+            let now = ProcessInfo.processInfo.systemUptime
+            var snapshot: [Int: (cpu: Double, memMB: Double)] = [:]
+            for pid in pids {
+                var info = ProcTaskInfo()
+                let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
+                guard proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sz) == sz else { continue }
+                let total = info.pti_total_user &+ info.pti_total_system
+                var cpu = 0.0
+                if let prev = Self.cpuSamples[Int(pid)] {
+                    let dNanos = total >= prev.cpuNanos ? total - prev.cpuNanos : 0
+                    let dWall = now - prev.wall
+                    if dWall > 0 {
+                        cpu = Double(dNanos) / (dWall * 1_000_000_000.0) * 100.0
+                    }
+                }
+                Self.cpuSamples[Int(pid)] = (total, now)
+                let memMB = Double(info.pti_resident_size) / (1024.0 * 1024.0)
+                snapshot[Int(pid)] = (cpu, memMB)
+            }
             DispatchQueue.main.async { usage = snapshot }
         }
     }
@@ -361,7 +386,7 @@ struct ContentView: View {
             refreshRunningApps()
             loadInstalledApps()
             refreshUsage()
-            Timer.publish(every: 2.0, on: .main, in: .common)
+            Timer.publish(every: 1.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { _ in refreshUsage() }
                 .store(in: &cancellables)
