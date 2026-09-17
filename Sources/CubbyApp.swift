@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 @main
 struct CubbyApp: App {
@@ -40,6 +41,8 @@ struct ContentView: View {
 
     @State private var apps: [RunningApp] = []
     @State private var hoveredAppID: Int? = nil
+    @State private var hoveredQuitID: Int? = nil
+    @State private var cancellables = Set<AnyCancellable>()
 
     private func refreshApps() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
@@ -94,6 +97,14 @@ struct ContentView: View {
                                     .background(Circle().fill(Color.white.opacity(0.15)))
                             }
                             .buttonStyle(.plain)
+                            .onHover { hovering in
+                                hoveredQuitID = hovering ? app.id : nil
+                            }
+                            .background(
+                                Circle().fill(hoveredQuitID == app.id
+                                              ? Color.red.opacity(0.8)
+                                              : Color.white.opacity(0.15))
+                            )
                             .opacity(hoveredAppID == app.id ? 1 : 0)
                             .help("Quit \(app.name)")
                         }
@@ -129,6 +140,16 @@ struct ContentView: View {
             }
         }
         .background(Color.black)
-        .onAppear { refreshApps() }
+        .onAppear {
+            refreshApps()
+            // React to app launches and quits while Cubby runs
+            NSWorkspace.shared.notificationCenter
+                .publisher(for: NSWorkspace.didLaunchApplicationNotification)
+                .merge(with: NSWorkspace.shared.notificationCenter
+                    .publisher(for: NSWorkspace.didTerminateApplicationNotification))
+                .receive(on: DispatchQueue.main)
+                .sink { _ in refreshApps() }
+                .store(in: &cancellables)
+        }
     }
 }
