@@ -65,8 +65,13 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .overlay(alignment: .bottom) {
+                // Bottom of last visible row always sits at viewport end
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(height: 1)
             }
         }
         .background(Color.black)
