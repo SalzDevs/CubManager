@@ -38,9 +38,10 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let rowCount = CGFloat(rows.count)
-            // Fit rows to window height, but never below minRowHeight (scroll if overflow)
-            let rowHeight = max(minRowHeight, geo.size.height / rowCount)
+            let rowCount = rows.count
+            // Viewport must show whole rows only: n = rows that fit at min height
+            let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
+            let rowHeight = geo.size.height / CGFloat(fitCount)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
