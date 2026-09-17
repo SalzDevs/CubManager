@@ -18,6 +18,9 @@ struct CubbyApp: App {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Bare-binary launch (not a .app bundle) needs explicit regular activation
+        // or the window never becomes key -> TextField ignores keyboard.
+        NSApp.setActivationPolicy(.regular)
         DispatchQueue.main.async {
             for window in NSApp.windows where window.level == .normal {
                 window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
@@ -25,7 +28,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 window.isMovableByWindowBackground = true
                 window.setContentSize(NSSize(width: 320, height: 420))
                 window.center()
+                window.makeKeyAndOrderFront(nil)
             }
+            NSApp.activate()
         }
     }
 }
