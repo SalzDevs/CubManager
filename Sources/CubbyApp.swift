@@ -51,6 +51,7 @@ struct ContentView: View {
     @State private var installedApps: [AppEntry] = []
     @State private var hoveredAppID: String? = nil
     @State private var hoveredQuitID: String? = nil
+    @State private var hoveredOpenID: String? = nil
     @State private var cancellables = Set<AnyCancellable>()
     @State private var query: String = ""
     @FocusState private var isSearchFocused: Bool
@@ -243,6 +244,30 @@ struct ContentView: View {
                                         .opacity(hoveredAppID == app.id ? 1 : 0)
                                         .help("Quit \(app.name)")
                                     }
+                                }
+                                if searching {
+                                    Button {
+                                        openApp(app)
+                                        query = ""
+                                    } label: {
+                                        Image(systemName: "arrow.up.right")
+                                            .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                                            .foregroundStyle(.white.opacity(0.7))
+                                            .frame(width: min(max(rowHeight * 0.3, 24), 32),
+                                                   height: min(max(rowHeight * 0.3, 24), 32))
+                                            .background(Circle().fill(Color.white.opacity(0.15)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .onHover { hovering in
+                                        hoveredOpenID = hovering ? app.id : nil
+                                    }
+                                    .background(
+                                        Circle().fill(hoveredOpenID == app.id
+                                                      ? Color.green.opacity(0.8)
+                                                      : Color.white.opacity(0.15))
+                                    )
+                                    .opacity(hoveredAppID == app.id ? 1 : 0)
+                                    .help("Open \(app.name)")
                                 }
                                 .padding(.horizontal, 14)
                                 .frame(height: rowHeight)
