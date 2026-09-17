@@ -30,12 +30,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct ContentView: View {
+    private var rows: [String] {
+        (1...12).map { "Row \($0)" }
+    }
+
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            Text("Cubby")
-                .foregroundStyle(.white.opacity(0.6))
-                .font(.system(size: 20, weight: .medium, design: .rounded))
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(rows, id: \.self) { row in
+                    HStack {
+                        Text(row)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .font(.system(size: 13, weight: .regular))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(height: 1)
+                    }
+                }
+            }
+            .padding(.top, 36)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Color.black)
     }
 }
