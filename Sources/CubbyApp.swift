@@ -178,9 +178,43 @@ struct ContentView: View {
         }
     }
 
-    private func usageString(_ u: (cpu: Double, memMB: Double)) -> String {
-        let mem = u.memMB >= 1024 ? String(format: "%.1f GB", u.memMB / 1024) : String(format: "%.0f MB", u.memMB)
-        return String(format: "%.1f%% · %@", u.cpu, mem)
+    private func memString(_ memMB: Double) -> String {
+        memMB >= 1024 ? String(format: "%.1f GB", memMB / 1024) : String(format: "%.0f MB", memMB)
+    }
+
+    private func cpuColor(_ cpu: Double) -> Color {
+        if cpu >= 200 { return Color.orange.opacity(0.9) }
+        if cpu >= 100 { return Color.yellow.opacity(0.75) }
+        return Color.white.opacity(0.55)
+    }
+
+    private func memColor(_ memMB: Double) -> Color {
+        memMB >= 2048 ? Color.yellow.opacity(0.75) : Color.white.opacity(0.55)
+    }
+
+    private func usageView(_ u: (cpu: Double, memMB: Double), rowHeight: CGFloat) -> some View {
+        let size = min(max(rowHeight * 0.18, 10), 13)
+        let iconSize = min(max(rowHeight * 0.16, 9), 11)
+        return HStack(spacing: 14) {
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(.system(size: iconSize, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.35))
+                Text(String(format: "%.1f%%", u.cpu))
+                    .font(.system(size: size, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(cpuColor(u.cpu))
+            }
+            HStack(spacing: 4) {
+                Image(systemName: "memorychip")
+                    .font(.system(size: iconSize, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.35))
+                Text(memString(u.memMB))
+                    .font(.system(size: size, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(memColor(u.memMB))
+            }
+        }
     }
 
     private func refreshUsage() {
@@ -340,10 +374,7 @@ struct ContentView: View {
                                     }
                                     Spacer()
                                     if !searching, let pid = app.pid, let u = usage[Int(pid)] {
-                                        Text(usageString(u))
-                                            .foregroundStyle(.white.opacity(0.45))
-                                            .font(.system(size: min(max(rowHeight * 0.18, 10), 13), weight: .regular))
-                                            .monospacedDigit()
+                                        usageView(u, rowHeight: rowHeight)
                                     }
                                     if app.isRunning {
                                         quitButton(app, rowHeight: rowHeight)
