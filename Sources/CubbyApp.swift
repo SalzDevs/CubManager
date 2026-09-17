@@ -54,6 +54,7 @@ struct ContentView: View {
     @State private var hoveredOpenID: String? = nil
     @State private var cancellables = Set<AnyCancellable>()
     @State private var query: String = ""
+    @State private var usage: [Int: (cpu: Double, memMB: Double)] = [:]
     @FocusState private var isSearchFocused: Bool
 
     private var trimmedQuery: String {
@@ -142,6 +143,40 @@ struct ContentView: View {
             running.activate(options: [.activateAllWindows])
         } else if let url = app.url {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func usageString(_ u: (cpu: Double, memMB: Double)) -> String {
+        let mem = u.memMB >= 1024 ? String(format: "%.1f GB", u.memMB / 1024) : String(format: "%.0f MB", u.memMB)
+        return String(format: "%.1f%% · %@", u.cpu, mem)
+    }
+
+    private func fetchUsage() -> [Int: (cpu: Double, memMB: Double)] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-axo", "pid=,%cpu=,rss="]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        do { try p.run() } catch { return [:] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        var result: [Int: (Double, Double)] = [:]
+        guard let str = String(data: data, encoding: .utf8) else { return result }
+        for line in str.split(separator: "\n") {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 3,
+                  let pid = Int(parts[0]),
+                  let cpu = Double(parts[1]),
+                  let rss = Double(parts[2]) else { continue }
+            result[pid] = (cpu, rss / 1024.0)
+        }
+        return result
+    }
+
+    private func refreshUsage() {
+        DispatchQueue.global(qos: .utility).async {
+            let snapshot = fetchUsage()
+            DispatchQueue.main.async { usage = snapshot }
         }
     }
 
@@ -270,6 +305,12 @@ struct ContentView: View {
                                             .frame(width: 6, height: 6)
                                     }
                                     Spacer()
+                                    if !searching, let pid = app.pid, let u = usage[Int(pid)] {
+                                        Text(usageString(u))
+                                            .foregroundStyle(.white.opacity(0.45))
+                                            .font(.system(size: min(max(rowHeight * 0.18, 10), 13), weight: .regular))
+                                            .monospacedDigit()
+                                    }
                                     if app.isRunning {
                                         quitButton(app, rowHeight: rowHeight)
                                     }
@@ -319,6 +360,11 @@ struct ContentView: View {
         .onAppear {
             refreshRunningApps()
             loadInstalledApps()
+            refreshUsage()
+            Timer.publish(every: 2.0, on: .main, in: .common)
+                .autoconnect()
+                .sink { _ in refreshUsage() }
+                .store(in: &cancellables)
             NSWorkspace.shared.notificationCenter
                 .publisher(for: NSWorkspace.didLaunchApplicationNotification)
                 .merge(with: NSWorkspace.shared.notificationCenter
