@@ -1,30 +1,32 @@
 import SwiftUI
+import AppKit
 
 @main
 struct CubbyApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .frame(minWidth: 320, minHeight: 420)
                 .background(Color.black)
-                .background(WindowAccessor())
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
     }
 }
 
-// Makes green traffic-light button zoom (expand arrows) instead of fullscreen
-struct WindowAccessor: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async {
-            view.window?.collectionBehavior = [.fullScreenAuxiliary]
+            for window in NSApp.windows where window.level == .normal {
+                window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
+                window.collectionBehavior = [.fullScreenNone]
+                window.isMovableByWindowBackground = true
+                window.setContentSize(NSSize(width: 320, height: 420))
+                window.center()
+            }
         }
-        return view
     }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 struct ContentView: View {
