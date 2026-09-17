@@ -195,7 +195,7 @@ struct ContentView: View {
     private func usageView(_ u: (cpu: Double, memMB: Double), rowHeight: CGFloat) -> some View {
         let size = min(max(rowHeight * 0.18, 10), 13)
         let iconSize = min(max(rowHeight * 0.16, 9), 11)
-        return HStack(spacing: 14) {
+        return HStack(spacing: 10) {
             HStack(spacing: 4) {
                 Image(systemName: "cpu")
                     .font(.system(size: iconSize, weight: .medium))
@@ -204,6 +204,8 @@ struct ContentView: View {
                     .font(.system(size: size, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(cpuColor(u.cpu))
+                    .lineLimit(1)
+                    .fixedSize()
             }
             HStack(spacing: 4) {
                 Image(systemName: "memorychip")
@@ -213,8 +215,11 @@ struct ContentView: View {
                     .font(.system(size: size, weight: .regular))
                     .monospacedDigit()
                     .foregroundStyle(memColor(u.memMB))
+                    .lineLimit(1)
+                    .fixedSize()
             }
         }
+        .fixedSize()
     }
 
     private func refreshUsage() {
@@ -362,11 +367,13 @@ struct ContentView: View {
                                     if let icon = app.icon {
                                         Image(nsImage: icon)
                                             .resizable()
-                                            .frame(width: min(max(rowHeight * 0.38, 22), 54),
-                                                   height: min(max(rowHeight * 0.38, 22), 54))
+                                            .frame(width: min(max(rowHeight * 0.34, 22), 44),
+                                                   height: min(max(rowHeight * 0.34, 22), 44))
                                     }
                                     Text(highlightedText(app.name, query: trimmedQuery))
-                                        .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
+                                        .font(.system(size: min(max(rowHeight * 0.24, 13), 19), weight: .regular))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.5)
                                     if searching && runningIDs.contains(app.id) {
                                         Circle()
                                             .fill(Color.green.opacity(0.9))
