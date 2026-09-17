@@ -9,9 +9,9 @@ struct CubbyApp: App {
         WindowGroup {
             ContentView()
                 .frame(minWidth: 320, minHeight: 420)
+                .navigationTitle("Cubby")
                 .background(Color.black)
         }
-        .windowStyle(.hiddenTitleBar)
     }
 }
 
@@ -53,7 +53,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .padding(.top, 36)
+            .padding(.top, 0)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
