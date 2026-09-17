@@ -33,7 +33,7 @@ struct ContentView: View {
     private let minRowHeight: CGFloat = 40
 
     private var rows: [String] {
-        (1...12).map { "Row \($0)" }
+        (1...1).map { "Row \($0)" }
     }
 
     var body: some View {
