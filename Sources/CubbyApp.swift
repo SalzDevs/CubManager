@@ -153,6 +153,55 @@ struct ContentView: View {
         refreshRunningApps()
     }
 
+    private func quitButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
+        Button {
+            quitApp(app)
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: min(max(rowHeight * 0.3, 24), 32),
+                       height: min(max(rowHeight * 0.3, 24), 32))
+                .background(Circle().fill(Color.white.opacity(0.15)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredQuitID = hovering ? app.id : nil
+        }
+        .background(
+            Circle().fill(hoveredQuitID == app.id
+                          ? Color.red.opacity(0.8)
+                          : Color.white.opacity(0.15))
+        )
+        .opacity(hoveredAppID == app.id ? 1 : 0)
+        .help("Quit \(app.name)")
+    }
+
+    private func openButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
+        Button {
+            openApp(app)
+            query = ""
+        } label: {
+            Image(systemName: "arrow.up.right")
+                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: min(max(rowHeight * 0.3, 24), 32),
+                       height: min(max(rowHeight * 0.3, 24), 32))
+                .background(Circle().fill(Color.white.opacity(0.15)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredOpenID = hovering ? app.id : nil
+        }
+        .background(
+            Circle().fill(hoveredOpenID == app.id
+                          ? Color.green.opacity(0.8)
+                          : Color.white.opacity(0.15))
+        )
+        .opacity(hoveredAppID == app.id ? 1 : 0)
+        .help("Open \(app.name)")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Search bar — flat full-width header row, flush with grid
@@ -222,52 +271,11 @@ struct ContentView: View {
                                     }
                                     Spacer()
                                     if app.isRunning {
-                                        Button {
-                                            quitApp(app)
-                                        } label: {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
-                                                .foregroundStyle(.white.opacity(0.7))
-                                                .frame(width: min(max(rowHeight * 0.3, 24), 32),
-                                                       height: min(max(rowHeight * 0.3, 24), 32))
-                                                .background(Circle().fill(Color.white.opacity(0.15)))
-                                        }
-                                        .buttonStyle(.plain)
-                                        .onHover { hovering in
-                                            hoveredQuitID = hovering ? app.id : nil
-                                        }
-                                        .background(
-                                            Circle().fill(hoveredQuitID == app.id
-                                                          ? Color.red.opacity(0.8)
-                                                          : Color.white.opacity(0.15))
-                                        )
-                                        .opacity(hoveredAppID == app.id ? 1 : 0)
-                                        .help("Quit \(app.name)")
+                                        quitButton(app, rowHeight: rowHeight)
                                     }
-                                }
-                                if searching {
-                                    Button {
-                                        openApp(app)
-                                        query = ""
-                                    } label: {
-                                        Image(systemName: "arrow.up.right")
-                                            .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.7))
-                                            .frame(width: min(max(rowHeight * 0.3, 24), 32),
-                                                   height: min(max(rowHeight * 0.3, 24), 32))
-                                            .background(Circle().fill(Color.white.opacity(0.15)))
+                                    if searching {
+                                        openButton(app, rowHeight: rowHeight)
                                     }
-                                    .buttonStyle(.plain)
-                                    .onHover { hovering in
-                                        hoveredOpenID = hovering ? app.id : nil
-                                    }
-                                    .background(
-                                        Circle().fill(hoveredOpenID == app.id
-                                                      ? Color.green.opacity(0.8)
-                                                      : Color.white.opacity(0.15))
-                                    )
-                                    .opacity(hoveredAppID == app.id ? 1 : 0)
-                                    .help("Open \(app.name)")
                                 }
                                 .padding(.horizontal, 14)
                                 .frame(height: rowHeight)
