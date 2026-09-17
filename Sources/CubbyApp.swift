@@ -61,15 +61,16 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(apps) { app in
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
                             if let icon = app.icon {
                                 Image(nsImage: icon)
                                     .resizable()
-                                    .frame(width: 20, height: 20)
+                                    .frame(width: min(max(rowHeight * 0.45, 24), 64),
+                                           height: min(max(rowHeight * 0.45, 24), 64))
                             }
                             Text(app.name)
                                 .foregroundStyle(.white.opacity(0.85))
-                                .font(.system(size: 13, weight: .regular))
+                                .font(.system(size: min(max(rowHeight * 0.3, 14), 24), weight: .regular))
                             Spacer()
                         }
                         .padding(.horizontal, 14)
