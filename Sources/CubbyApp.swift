@@ -43,6 +43,8 @@ struct ContentView: View {
     @State private var hoveredAppID: Int? = nil
     @State private var hoveredQuitID: Int? = nil
     @State private var cancellables = Set<AnyCancellable>()
+    @State private var query: String = ""
+    @FocusState private var isSearchFocused: Bool
 
     private func refreshApps() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
@@ -65,7 +67,40 @@ struct ContentView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
+        VStack(spacing: 0) {
+            // Search bar — flat full-width header row, flush with grid
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.white.opacity(0.4))
+                    .font(.system(size: 13, weight: .medium))
+                TextField("Search apps", text: $query, prompt: Text("Search apps").foregroundColor(.white.opacity(0.35)))
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 13))
+                    .focused($isSearchFocused)
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.white.opacity(0.5))
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: minRowHeight)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(isSearchFocused ? Color.white.opacity(0.35) : Color.white.opacity(0.12))
+                    .frame(height: 1)
+            }
+            .animation(.easeInOut(duration: 0.15), value: query.isEmpty)
+            .animation(.easeInOut(duration: 0.15), value: isSearchFocused)
+
+            GeometryReader { geo in
             let rowCount = apps.count
             // Viewport must show whole rows only: n = rows that fit at min height
             let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
@@ -137,6 +172,7 @@ struct ContentView: View {
                 Rectangle()
                     .fill(Color.white.opacity(0.12))
                     .frame(height: 1)
+            }
             }
         }
         .background(Color.black)
