@@ -29,25 +29,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+struct RunningApp: Identifiable {
+    let id: Int
+    let name: String
+    let icon: NSImage?
+}
+
 struct ContentView: View {
     private let minRowHeight: CGFloat = 40
 
-    private var rows: [String] {
-        (1...1).map { "Row \($0)" }
+    @State private var apps: [RunningApp] = []
+
+    private func refreshApps() {
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        apps = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.processIdentifier != selfPid }
+            .compactMap { app -> RunningApp? in
+                guard let name = app.localizedName else { return nil }
+                return RunningApp(id: Int(app.processIdentifier), name: name, icon: app.icon)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {
         GeometryReader { geo in
-            let rowCount = rows.count
+            let rowCount = apps.count
             // Viewport must show whole rows only: n = rows that fit at min height
             let fitCount = max(1, min(rowCount, Int(geo.size.height / minRowHeight)))
             let rowHeight = geo.size.height / CGFloat(fitCount)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(rows, id: \.self) { row in
-                        HStack {
-                            Text(row)
+                    ForEach(apps) { app in
+                        HStack(spacing: 8) {
+                            if let icon = app.icon {
+                                Image(nsImage: icon)
+                                    .resizable()
+                                    .frame(width: 20, height: 20)
+                            }
+                            Text(app.name)
                                 .foregroundStyle(.white.opacity(0.85))
                                 .font(.system(size: 13, weight: .regular))
                             Spacer()
@@ -76,5 +96,6 @@ struct ContentView: View {
             }
         }
         .background(Color.black)
+        .onAppear { refreshApps() }
     }
 }
