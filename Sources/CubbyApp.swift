@@ -65,12 +65,12 @@ struct ContentView: View {
                             if let icon = app.icon {
                                 Image(nsImage: icon)
                                     .resizable()
-                                    .frame(width: min(max(rowHeight * 0.45, 24), 64),
-                                           height: min(max(rowHeight * 0.45, 24), 64))
+                                    .frame(width: min(max(rowHeight * 0.38, 22), 54),
+                                           height: min(max(rowHeight * 0.38, 22), 54))
                             }
                             Text(app.name)
                                 .foregroundStyle(.white.opacity(0.85))
-                                .font(.system(size: min(max(rowHeight * 0.3, 14), 24), weight: .regular))
+                                .font(.system(size: min(max(rowHeight * 0.26, 13), 21), weight: .regular))
                             Spacer()
                         }
                         .padding(.horizontal, 14)
