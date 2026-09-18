@@ -37,12 +37,15 @@ struct CubbyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup {
+        // Single window: WindowGroup restores duplicate windows on relaunch
+        Window("Cubby", id: "main") {
             ContentView()
                 .frame(minWidth: 320, minHeight: 420)
                 .navigationTitle("Cubby")
                 .background(Color.black)
         }
+        .windowStyle(.hiddenTitleBar)
+        .restorationBehavior(.disabled)
     }
 }
 
@@ -207,6 +210,17 @@ struct ContentView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             expandedID = expandedID == app.id ? nil : app.id
         }
+    }
+
+    private func clearHover() {
+        // Window resize moves rows under a stationary cursor; SwiftUI's
+        // tracking areas don't fire enter/exit on pure frame changes, so
+        // hover state goes stale (highlight sticks to the wrong row).
+        // Reset it on resize; the next real mouse move re-establishes it.
+        hoveredAppID = nil
+        hoveredQuitID = nil
+        hoveredOpenID = nil
+        hoveredChevronID = nil
     }
 
     private func openApp(_ app: AppEntry) {
@@ -632,6 +646,13 @@ struct ContentView: View {
                 .receive(on: DispatchQueue.main)
                 .sink { _ in refreshRunningApps() }
                 .store(in: &cancellables)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
+                .merge(with: NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification))
+                .receive(on: DispatchQueue.main)
+        ) { _ in
+            clearHover()
         }
     }
 }
