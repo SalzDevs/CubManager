@@ -33,15 +33,15 @@ private func proc_pidinfo(_ pid: Int32, _ flavor: Int32, _ arg: UInt64, _ buffer
 private func proc_pid_rusage(_ pid: Int32, _ flavor: Int32, _ buffer: UnsafeMutableRawPointer?) -> Int32
 
 @main
-struct CubbyApp: App {
+struct CubManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         // Single window: WindowGroup restores duplicate windows on relaunch
-        Window("Cubby", id: "main") {
+        Window("CubManager", id: "main") {
             ContentView()
                 .frame(minWidth: 320, minHeight: 420)
-                .navigationTitle("Cubby")
+                .navigationTitle("CubManager")
                 .background(Color.black)
         }
         .windowStyle(.hiddenTitleBar)
@@ -107,7 +107,7 @@ struct Sparkline: View {
 
 struct ContentView: View {
     private let minRowHeight: CGFloat = 40
-    private static let usageQueue = DispatchQueue(label: "cubby.usage")
+    private static let usageQueue = DispatchQueue(label: "cubmanager.usage")
     private static var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
 
     @State private var runningApps: [AppEntry] = []
