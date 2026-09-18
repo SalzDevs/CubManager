@@ -201,6 +201,16 @@ struct ContentView: View {
         }
     }
 
+    private func rowTap(_ app: AppEntry) {
+        // While a detail panel is open (inspection mode) taps collapse
+        // instead of activating another app.
+        if expandedID != nil {
+            withAnimation(.easeInOut(duration: 0.2)) { expandedID = nil }
+        } else {
+            openApp(app)
+        }
+    }
+
     private func openApp(_ app: AppEntry) {
         if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
             running.activate(options: [.activateAllWindows])
@@ -537,16 +547,20 @@ struct ContentView: View {
                                         detailPanel(app)
                                     } else {
                                     HStack(spacing: 8) {
-                                        if let icon = app.icon {
-                                            Image(nsImage: icon)
-                                                .resizable()
-                                                .frame(width: min(max(rowHeight * 0.32, 20), 38),
-                                                       height: min(max(rowHeight * 0.32, 20), 38))
+                                        HStack(spacing: 10) {
+                                            if let icon = app.icon {
+                                                Image(nsImage: icon)
+                                                    .resizable()
+                                                    .frame(width: min(max(rowHeight * 0.32, 20), 38),
+                                                           height: min(max(rowHeight * 0.32, 20), 38))
+                                            }
+                                            Text(highlightedText(app.name, query: trimmedQuery))
+                                                .font(.system(size: 15, weight: .regular))
+                                                .lineLimit(1)
+                                                .layoutPriority(1)
                                         }
-                                        Text(highlightedText(app.name, query: trimmedQuery))
-                                            .font(.system(size: 15, weight: .regular))
-                                            .lineLimit(1)
-                                            .layoutPriority(1)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { rowTap(app) }
                                         if searching && runningIDs.contains(app.id) {
                                             Circle()
                                                 .fill(Color.green.opacity(0.9))
@@ -568,16 +582,6 @@ struct ContentView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .frame(height: rowHeight)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        // While a detail panel is open (inspection mode),
-                                        // taps collapse instead of activating another app.
-                                        if expandedID != nil {
-                                            withAnimation(.easeInOut(duration: 0.2)) { expandedID = nil }
-                                        } else {
-                                            openApp(app)
-                                        }
-                                    }
                                     .overlay(alignment: .top) {
                                         Rectangle()
                                             .fill(Color.white.opacity(0.12))
