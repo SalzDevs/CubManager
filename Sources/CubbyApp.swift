@@ -202,12 +202,10 @@ struct ContentView: View {
     }
 
     private func rowTap(_ app: AppEntry) {
-        // While a detail panel is open (inspection mode) taps collapse
-        // instead of activating another app.
-        if expandedID != nil {
-            withAnimation(.easeInOut(duration: 0.2)) { expandedID = nil }
-        } else {
-            openApp(app)
+        // Row click toggles the details panel. Clicking never switches
+        // to another app's window.
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedID = expandedID == app.id ? nil : app.id
         }
     }
 
