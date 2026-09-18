@@ -289,6 +289,7 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             hoveredChevronID = hovering ? app.id : nil
+            if hovering { hoveredAppID = app.id }
         }
         .background(
             Circle().fill(hoveredChevronID == app.id
@@ -296,6 +297,7 @@ struct ContentView: View {
                           : Color.white.opacity(0.15))
         )
         .opacity(expandedID == app.id ? 1 : (hoveredAppID == app.id ? 1 : 0))
+        .allowsHitTesting(hoveredAppID == app.id)
         .help("Details")
     }
 
@@ -467,6 +469,7 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             hoveredQuitID = hovering ? app.id : nil
+            if hovering { hoveredAppID = app.id }
         }
         .background(
             Circle().fill(hoveredQuitID == app.id
@@ -474,6 +477,7 @@ struct ContentView: View {
                           : Color.white.opacity(0.15))
         )
         .opacity(hoveredAppID == app.id ? 1 : 0)
+        .allowsHitTesting(hoveredAppID == app.id)
         .help("Quit \(app.name)")
     }
 
@@ -491,6 +495,7 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             hoveredOpenID = hovering ? app.id : nil
+            if hovering { hoveredAppID = app.id }
         }
         .background(
             Circle().fill(hoveredOpenID == app.id
@@ -498,6 +503,7 @@ struct ContentView: View {
                           : Color.white.opacity(0.15))
         )
         .opacity(hoveredAppID == app.id ? 1 : 0)
+        .allowsHitTesting(hoveredAppID == app.id)
         .help("Open \(app.name)")
     }
 
@@ -601,6 +607,8 @@ struct ContentView: View {
                                     }
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                                 .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
                                 .onHover { hovering in
                                     hoveredAppID = hovering ? app.id : nil
