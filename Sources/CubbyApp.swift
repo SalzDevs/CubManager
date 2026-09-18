@@ -576,9 +576,6 @@ struct ContentView: View {
                                             .frame(height: 1)
                                     }
                                     }
-                                    if !searching && expandedID == app.id {
-                                        detailPanel(app)
-                                    }
                                 }
                                 .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
                                 .onHover { hovering in
