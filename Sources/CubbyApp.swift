@@ -5,7 +5,7 @@ import Combine
 private let PROC_PIDTASKINFO: Int32 = 4
 private let RUSAGE_INFO_V2: Int32 = 2
 
-private struct ProcTaskInfo {
+struct ProcTaskInfo {
     var pti_virtual_size: UInt64 = 0
     var pti_resident_size: UInt64 = 0
     var pti_total_user: UInt64 = 0
@@ -74,6 +74,34 @@ struct AppEntry: Identifiable {
     var isRunning: Bool { pid != nil }
 }
 
+struct UsageSnapshot {
+    var cpu: Double = 0
+    var memMB: Double = 0
+    var info = ProcTaskInfo()
+    var diskReadMB: Double = 0
+    var diskWriteMB: Double = 0
+}
+
+struct Sparkline: View {
+    let samples: [Double]
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let maxV = max(100.0, samples.max() ?? 100.0)
+            Path { p in
+                guard samples.count > 1, w > 0, h > 0 else { return }
+                for (i, s) in samples.enumerated() {
+                    let x = w * CGFloat(i) / CGFloat(samples.count - 1)
+                    let y = h - min(h, h * CGFloat(s / maxV))
+                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                }
+            }
+            .stroke(Color.white.opacity(0.4), lineWidth: 1.5)
+        }
+    }
+}
+
 struct ContentView: View {
     private let minRowHeight: CGFloat = 40
     private static let usageQueue = DispatchQueue(label: "cubby.usage")
@@ -84,9 +112,12 @@ struct ContentView: View {
     @State private var hoveredAppID: String? = nil
     @State private var hoveredQuitID: String? = nil
     @State private var hoveredOpenID: String? = nil
+    @State private var hoveredChevronID: String? = nil
     @State private var cancellables = Set<AnyCancellable>()
     @State private var query: String = ""
-    @State private var usage: [Int: (cpu: Double, memMB: Double)] = [:]
+    @State private var usage: [Int: UsageSnapshot] = [:]
+    @State private var history: [Int: [Double]] = [:]
+    @State private var expandedID: String? = nil
     @FocusState private var isSearchFocused: Bool
 
     private var trimmedQuery: String {
@@ -192,11 +223,135 @@ struct ContentView: View {
         memMB >= 2048 ? Color.yellow.opacity(0.75) : Color.white.opacity(0.55)
     }
 
-    private func usageView(_ u: (cpu: Double, memMB: Double), rowHeight: CGFloat) -> some View {
-        let size = min(max(rowHeight * 0.18, 10), 13)
-        let iconSize = min(max(rowHeight * 0.16, 9), 11)
-        return HStack(spacing: 8) {
-            HStack(spacing: 4) {
+    private func fmtK(_ v: Double) -> String {
+        v >= 1000 ? String(format: "%.1fk", v / 1000) : String(format: "%.0f", v)
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.35))
+            Text(value)
+                .font(.system(size: 13))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+        }
+    }
+
+    private func panelButton(_ title: String, red: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(red ? Color.red.opacity(0.9) : Color.white.opacity(0.8))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6).fill(red ? Color.red.opacity(0.15) : Color.white.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chevronButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedID = expandedID == app.id ? nil : app.id
+            }
+        } label: {
+            Image(systemName: expandedID == app.id ? "chevron.up" : "chevron.down")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.white.opacity(0.15)))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredChevronID = hovering ? app.id : nil
+        }
+        .background(
+            Circle().fill(hoveredChevronID == app.id
+                          ? Color.white.opacity(0.25)
+                          : Color.white.opacity(0.15))
+        )
+        .opacity(expandedID == app.id ? 1 : (hoveredAppID == app.id ? 1 : 0))
+        .help("Details")
+    }
+
+    private func detailPanel(_ app: AppEntry) -> some View {
+        let u = app.pid.flatMap { usage[Int($0)] }
+        let hist = app.pid.flatMap { history[Int($0)] } ?? []
+        let bundle = app.url.flatMap { Bundle(url: $0) }
+        let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let bid = bundle?.bundleIdentifier ?? app.id
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                if let icon = app.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 44, height: 44)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                    Text("\(version ?? "–") · \(bid)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                    Text(app.url?.path ?? "–")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { expandedID = nil }
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(Color.white.opacity(0.15)))
+                }
+                .buttonStyle(.plain)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CPU · last 60s")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.35))
+                Sparkline(samples: hist)
+                    .frame(height: 44)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.03)))
+            }
+            LazyVGrid(columns: [
+                GridItem(.flexible(), alignment: .leading),
+                GridItem(.flexible(), alignment: .leading),
+                GridItem(.flexible(), alignment: .leading)
+            ], alignment: .leading, spacing: 12) {
+                metric("CPU", String(format: "%.1f%%", u?.cpu ?? 0))
+                metric("MEM", memString(u?.memMB ?? 0))
+                metric("THREADS", "\(u?.info.pti_threadnum ?? 0)")
+                metric("DISK R", memString(u?.diskReadMB ?? 0))
+                metric("DISK W", memString(u?.diskWriteMB ?? 0))
+                metric("PAGEINS", "\(u?.info.pti_pageins ?? 0)")
+                metric("FAULTS", fmtK(Double(u?.info.pti_faults ?? 0)))
+                metric("SYSCALLS", fmtK(Double(u?.info.pti_syscalls_mach ?? 0) + Double(u?.info.pti_syscalls_unix ?? 0)))
+                metric("CTX SW", fmtK(Double(u?.info.pti_csw ?? 0)))
+                metric("PID", "\(app.pid ?? 0)")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 2)
+        .padding(.bottom, 14)
+    }
+
+    private func usageView(_ u: UsageSnapshot, rowHeight: CGFloat) -> some View {
+        let size = min(max(rowHeight * 0.18, 10), 12)
+        let iconSize = min(max(rowHeight * 0.16, 9), 10)
+        return HStack(spacing: 6) {
+            HStack(spacing: 3) {
                 Image(systemName: "cpu")
                     .font(.system(size: iconSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.35))
@@ -207,7 +362,7 @@ struct ContentView: View {
                     .lineLimit(1)
                     .fixedSize()
             }
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: "memorychip")
                     .font(.system(size: iconSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.35))
@@ -226,7 +381,7 @@ struct ContentView: View {
         let pids = runningApps.compactMap { $0.pid }
         Self.usageQueue.async {
             let now = ProcessInfo.processInfo.systemUptime
-            var snapshot: [Int: (cpu: Double, memMB: Double)] = [:]
+            var snapshot: [Int: UsageSnapshot] = [:]
             for pid in pids {
                 var info = ProcTaskInfo()
                 let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
@@ -241,15 +396,31 @@ struct ContentView: View {
                     }
                 }
                 Self.cpuSamples[Int(pid)] = (total, now)
-                var physFootprint: UInt64 = 0
+                var snap = UsageSnapshot()
+                snap.cpu = cpu
+                snap.info = info
                 var rusageBuf = [UInt8](repeating: 0, count: 512)
                 if proc_pid_rusage(pid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
-                    physFootprint = rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: 72, as: UInt64.self) }
+                    func u64(_ off: Int) -> UInt64 { rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: off, as: UInt64.self) } }
+                    let mb = 1024.0 * 1024.0
+                    snap.memMB = Double(u64(72)) / mb
+                    snap.diskReadMB = Double(u64(144)) / mb
+                    snap.diskWriteMB = Double(u64(152)) / mb
                 }
-                let memMB = Double(physFootprint) / (1024.0 * 1024.0)
-                snapshot[Int(pid)] = (cpu, memMB)
+                snapshot[Int(pid)] = snap
             }
-            DispatchQueue.main.async { usage = snapshot }
+            DispatchQueue.main.async {
+                usage = snapshot
+                var newHist = history
+                for (pid, s) in snapshot {
+                    var h = newHist[pid] ?? []
+                    h.append(s.cpu)
+                    if h.count > 60 { h.removeFirst(h.count - 60) }
+                    newHist[pid] = h
+                }
+                newHist = newHist.filter { snapshot[$0.key] != nil }
+                history = newHist
+            }
         }
     }
 
@@ -266,10 +437,9 @@ struct ContentView: View {
             quitApp(app)
         } label: {
             Image(systemName: "xmark")
-                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                .font(.system(size: min(max(rowHeight * 0.2, 10), 12), weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
-                .frame(width: min(max(rowHeight * 0.28, 22), 28),
-                       height: min(max(rowHeight * 0.28, 22), 28))
+                .frame(width: 18, height: 18)
                 .background(Circle().fill(Color.white.opacity(0.15)))
         }
         .buttonStyle(.plain)
@@ -291,10 +461,9 @@ struct ContentView: View {
             query = ""
         } label: {
             Image(systemName: "arrow.up.right")
-                .font(.system(size: min(max(rowHeight * 0.2, 11), 18), weight: .medium))
+                .font(.system(size: min(max(rowHeight * 0.2, 10), 12), weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
-                .frame(width: min(max(rowHeight * 0.28, 22), 28),
-                       height: min(max(rowHeight * 0.28, 22), 28))
+                .frame(width: 18, height: 18)
                 .background(Circle().fill(Color.white.opacity(0.15)))
         }
         .buttonStyle(.plain)
@@ -363,38 +532,55 @@ struct ContentView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(displayedApps) { app in
-                                HStack(spacing: 10) {
-                                    if let icon = app.icon {
-                                        Image(nsImage: icon)
-                                            .resizable()
-                                            .frame(width: min(max(rowHeight * 0.32, 20), 38),
-                                                   height: min(max(rowHeight * 0.32, 20), 38))
+                                VStack(spacing: 0) {
+                                    if !searching && expandedID == app.id {
+                                        detailPanel(app)
+                                    } else {
+                                    HStack(spacing: 8) {
+                                        if let icon = app.icon {
+                                            Image(nsImage: icon)
+                                                .resizable()
+                                                .frame(width: min(max(rowHeight * 0.32, 20), 38),
+                                                       height: min(max(rowHeight * 0.32, 20), 38))
+                                        }
+                                        Text(highlightedText(app.name, query: trimmedQuery))
+                                            .font(.system(size: 15, weight: .regular))
+                                            .lineLimit(1)
+                                            .layoutPriority(1)
+                                        if searching && runningIDs.contains(app.id) {
+                                            Circle()
+                                                .fill(Color.green.opacity(0.9))
+                                                .frame(width: 6, height: 6)
+                                        }
+                                        Spacer()
+                                        if !searching, let pid = app.pid, let u = usage[Int(pid)] {
+                                            usageView(u, rowHeight: rowHeight)
+                                        }
+                                        if !searching {
+                                            chevronButton(app, rowHeight: rowHeight)
+                                        }
+                                        if app.isRunning {
+                                            quitButton(app, rowHeight: rowHeight)
+                                        }
+                                        if searching {
+                                            openButton(app, rowHeight: rowHeight)
+                                        }
                                     }
-                                    Text(highlightedText(app.name, query: trimmedQuery))
-                                        .font(.system(size: 15, weight: .regular))
-                                        .lineLimit(1)
-                                        .layoutPriority(1)
-                                    if searching && runningIDs.contains(app.id) {
-                                        Circle()
-                                            .fill(Color.green.opacity(0.9))
-                                            .frame(width: 6, height: 6)
+                                    .padding(.horizontal, 12)
+                                    .frame(height: rowHeight)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { openApp(app) }
+                                    .overlay(alignment: .top) {
+                                        Rectangle()
+                                            .fill(Color.white.opacity(0.12))
+                                            .frame(height: 1)
                                     }
-                                    Spacer()
-                                    if !searching, let pid = app.pid, let u = usage[Int(pid)] {
-                                        usageView(u, rowHeight: rowHeight)
                                     }
-                                    if app.isRunning {
-                                        quitButton(app, rowHeight: rowHeight)
-                                    }
-                                    if searching {
-                                        openButton(app, rowHeight: rowHeight)
+                                    if !searching && expandedID == app.id {
+                                        detailPanel(app)
                                     }
                                 }
-                                .padding(.horizontal, 12)
-                                .frame(height: rowHeight)
                                 .background(hoveredAppID == app.id ? Color.white.opacity(0.08) : Color.clear)
-                                .contentShape(Rectangle())
-                                .onTapGesture { openApp(app) }
                                 .onHover { hovering in
                                     hoveredAppID = hovering ? app.id : nil
                                 }
@@ -405,11 +591,6 @@ struct ContentView: View {
                                     }
                                 }
                                 .overlay(alignment: .bottom) {
-                                    Rectangle()
-                                        .fill(Color.white.opacity(0.12))
-                                        .frame(height: 1)
-                                }
-                                .overlay(alignment: .top) {
                                     Rectangle()
                                         .fill(Color.white.opacity(0.12))
                                         .frame(height: 1)
