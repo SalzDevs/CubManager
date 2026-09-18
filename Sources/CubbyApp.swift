@@ -569,7 +569,15 @@ struct ContentView: View {
                                     .padding(.horizontal, 12)
                                     .frame(height: rowHeight)
                                     .contentShape(Rectangle())
-                                    .onTapGesture { openApp(app) }
+                                    .onTapGesture {
+                                        // While a detail panel is open (inspection mode),
+                                        // taps collapse instead of activating another app.
+                                        if expandedID != nil {
+                                            withAnimation(.easeInOut(duration: 0.2)) { expandedID = nil }
+                                        } else {
+                                            openApp(app)
+                                        }
+                                    }
                                     .overlay(alignment: .top) {
                                         Rectangle()
                                             .fill(Color.white.opacity(0.12))
