@@ -363,7 +363,7 @@ final class MenubarController: NSObject, NSMenuDelegate {
     static func menuBarLogoIcon() -> NSImage {
         if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
            let img = NSImage(contentsOf: url) {
-            img.size = NSSize(width: 18, height: 18)   // 36px rep renders at 2x
+            img.size = NSSize(width: 20, height: 20)   // 44px rep renders at 2x
             return img
         }
         return bearMenuBarIcon()
