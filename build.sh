@@ -7,7 +7,6 @@ cd "$(dirname "$0")"
 APP_NAME="CubManager"
 BUNDLE_ID="com.salzdevs.cubmanager"
 VERSION="1.0.0"
-SRC="Sources/CubManagerApp.swift"
 ICON_SRC="Assets/AppIcon.png"
 
 BUNDLE="$APP_NAME.app"
@@ -31,7 +30,7 @@ echo "→ Building $BUNDLE"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
-swiftc -parse-as-library -O "$SRC" -o "$BUNDLE/Contents/MacOS/$APP_NAME"
+swiftc -parse-as-library -O Sources/*.swift -o "$BUNDLE/Contents/MacOS/$APP_NAME"
 
 cp "$ICNS" "$BUNDLE/Contents/Resources/$ICNS"
 cp "Assets/MenuBarIcon.png" "$BUNDLE/Contents/Resources/MenuBarIcon.png"
