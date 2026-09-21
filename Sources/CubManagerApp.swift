@@ -314,6 +314,169 @@ final class UsageStore: ObservableObject {
     }
 }
 
+// Notch-docked mode: a black panel docked top-center over the camera notch
+// (looks like the notch extends), collapsed to a bear mark; expands on hover
+// into the full app grid. Non-activating: hovering never steals focus.
+final class NotchPanel: NSPanel {
+    weak var notchController: NotchController?
+
+    override var canBecomeKey: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .mouseExited {
+            notchController?.scheduleCollapse()
+        } else if event.type == .mouseEntered {
+            notchController?.cancelCollapse()
+        }
+        super.sendEvent(event)
+    }
+}
+
+final class NotchController: NSObject {
+    static let shared = NotchController()
+
+
+    private var panel: NotchPanel?
+    private var isExpanded = false
+    private var collapseTimer: Timer?
+    private var store: UsageStore { UsageStore.shared }
+
+    private var hasNotch: Bool {
+        (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
+    }
+
+    private var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "notchEnabled") && hasNotch
+    }
+
+    func apply() {
+        if isEnabled {
+            if panel == nil { createPanel() }
+            position()
+        } else if let p = panel {
+            p.orderOut(nil)
+            panel = nil
+            isExpanded = false
+        }
+    }
+
+    private func createPanel() {
+        let p = NotchPanel(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        p.level = .statusBar
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false
+        p.hidesOnDeactivate = false
+        p.isReleasedWhenClosed = false
+        p.notchController = self
+        p.ignoresMouseEvents = false
+        panel = p
+        showCollapsed()
+    }
+
+    private func screenFrame() -> NSRect {
+        NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? NSRect(x: 0, y: 0, width: 1470, height: 956)
+    }
+
+    private func collapsedFrame() -> NSRect {
+        let s = screenFrame()
+        let height: CGFloat = 32
+        return NSRect(x: s.midX - 120, y: s.maxY - height, width: 240, height: height)
+    }
+
+    private func expandedFrame() -> NSRect {
+        let s = screenFrame()
+        let height = min(420, s.maxY - 60)
+        return NSRect(x: s.midX - 160, y: s.maxY - height, width: 320, height: height)
+    }
+
+    private func showCollapsed() {
+        guard let panel else { return }
+        isExpanded = false
+        let hosting = NSHostingView(rootView:
+            NotchCollapsedView()
+                .frame(width: 240, height: 32)
+                .clipShape(.rect(bottomLeadingRadius: 12, bottomTrailingRadius: 12))
+        )
+        hosting.autoresizingMask = [.width, .height]
+        hosting.frame = NSRect(origin: .zero, size: panel.frame.size)
+        panel.contentView = hosting
+        panel.setFrame(collapsedFrame(), display: true)
+        panel.orderFrontRegardless()
+    }
+
+    func expand() {
+        guard let panel, !isExpanded else { return }
+        isExpanded = true
+        let f = expandedFrame()
+        let hosting = NSHostingView(rootView:
+            ContentView()
+                .environmentObject(store)
+                .frame(width: 320, height: f.height)
+                .clipShape(.rect(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
+        )
+        hosting.autoresizingMask = [.width, .height]
+        hosting.frame = NSRect(origin: .zero, size: f.size)
+        panel.contentView = hosting
+        panel.setFrame(f, display: true, animate: true)
+    }
+
+    func collapse() {
+        guard let panel, isExpanded else { return }
+        showCollapsed()
+    }
+
+    func scheduleCollapse() {
+        collapseTimer?.invalidate()
+        collapseTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: false) { [weak self] _ in
+            self?.collapse()
+        }
+    }
+
+    func cancelCollapse() {
+        collapseTimer?.invalidate()
+        collapseTimer = nil
+    }
+
+    private func position() {
+        guard let panel else { return }
+        panel.setFrame(isExpanded ? expandedFrame() : collapsedFrame(), display: true)
+    }
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screenChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil
+        )
+    }
+
+    @objc private func screenChanged() { apply() }
+}
+
+struct NotchCollapsedView: View {
+    var body: some View {
+        ZStack {
+            Color.black
+            Image(nsImage: MenubarController.menuBarLogoIcon())
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 16, height: 16)
+                .opacity(0.9)
+        }
+        .onHover { hovering in
+            if hovering { NotchController.shared.expand() }
+        }
+        .help("CubManager")
+    }
+}
+
 // Weak ref to the main window (the window is never destroyed — see AppDelegate)
 final class MainWindowRef {
     static weak var window: NSWindow?
@@ -498,6 +661,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.applyDockIcon()
         MenubarController.shared.apply()
+        NotchController.shared.apply()
         DispatchQueue.main.async {
             for window in NSApp.windows where window.level == .normal {
                 window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
@@ -524,8 +688,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 struct SettingsView: View {
     @AppStorage("menubarEnabled") private var menubarEnabled = true
     @AppStorage("dockIconVisible") private var dockIconVisible = true
+    @AppStorage("notchEnabled") private var notchEnabled = false
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("refreshInterval") private var refreshInterval = 1.0
+
+    private var hasNotch: Bool {
+        (NSScreen.main?.safeAreaInsets.top ?? 0) > 0
+    }
 
     var body: some View {
         Form {
@@ -533,6 +702,13 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $menubarEnabled)
                 Toggle("Show Dock icon", isOn: $dockIconVisible)
                     .disabled(!menubarEnabled)
+                Toggle("Show in notch", isOn: $notchEnabled)
+                    .disabled(!hasNotch)
+                if !hasNotch {
+                    Text("This Mac has no notch")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("Launch at login", isOn: $launchAtLogin)
                 Picker("Refresh rate", selection: $refreshInterval) {
                     Text("Every second").tag(1.0)
@@ -566,6 +742,9 @@ struct SettingsView: View {
         }
         .onChange(of: dockIconVisible) { _, _ in
             AppDelegate.applyDockIcon()
+        }
+        .onChange(of: notchEnabled) { _, _ in
+            NotchController.shared.apply()
         }
         .onChange(of: menubarEnabled) { _, on in
             // Without a Dock icon the menu bar is the only way back in.
