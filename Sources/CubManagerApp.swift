@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import ServiceManagement
+import UserNotifications
 
 private let PROC_PIDTASKINFO: Int32 = 4
 private let RUSAGE_INFO_V2: Int32 = 2
@@ -43,6 +44,15 @@ struct AppEntry: Identifiable {
     var isRunning: Bool { pid != nil }
 }
 
+struct AlertRule: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var appID: String        // bundle id, or "any"
+    var appName: String
+    var threshold: Double    // CPU %
+    var durationSeconds: Int // consecutive seconds above threshold
+    var enabled: Bool = true
+}
+
 struct UsageSnapshot {
     var cpu: Double = 0
     var memMB: Double = 0
@@ -62,6 +72,9 @@ final class UsageStore: ObservableObject {
     @Published var installedApps: [AppEntry] = []
     @Published var usage: [Int: UsageSnapshot] = [:]
     @Published var history: [Int: [Double]] = [:]
+    @Published var alertRules: [AlertRule] = []
+    @Published var liveAlertRuleIDs: Set<UUID> = []
+    private var alertState: [UUID: (since: Date, fired: Bool)] = [:]
 
     private let usageQueue = DispatchQueue(label: "cubmanager.usage")
     private var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
@@ -93,6 +106,7 @@ final class UsageStore: ObservableObject {
             .store(in: &cancellables)
         refreshRunningApps()
         loadInstalledApps()
+        loadAlertRules()
         startNettopMonitor()
         refreshUsage()
         lastRefresh = Date()
@@ -107,6 +121,89 @@ final class UsageStore: ObservableObject {
 
     func cpuPct(_ app: AppEntry) -> Double {
         (app.pid.flatMap { usage[Int($0)]?.cpu }) ?? 0
+    }
+
+    // MARK: - CPU spike alerts
+
+    private func loadAlertRules() {
+        if let data = UserDefaults.standard.data(forKey: "alertRules"),
+           let rules = try? JSONDecoder().decode([AlertRule].self, from: data) {
+            alertRules = rules
+        }
+    }
+
+    func saveAlertRules() {
+        if let data = try? JSONEncoder().encode(alertRules) {
+            UserDefaults.standard.set(data, forKey: "alertRules")
+        }
+    }
+
+    static func requestNotificationPermission() {
+        UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func addAlertRule() {
+        alertRules.append(AlertRule(appID: "any", appName: "Any app", threshold: 80, durationSeconds: 30))
+        saveAlertRules()
+        Self.requestNotificationPermission()
+    }
+
+    func removeAlertRule(_ id: UUID) {
+        alertRules.removeAll { $0.id == id }
+        alertState[id] = nil
+        liveAlertRuleIDs.remove(id)
+        saveAlertRules()
+    }
+
+    /// State machine per rule: consecutive wall time above threshold fires once;
+    /// dropping below re-arms. Called on the main thread after each usage tick.
+    private func evaluateAlerts(_ snapshot: [Int: UsageSnapshot]) {
+        guard !alertRules.isEmpty else {
+            if !liveAlertRuleIDs.isEmpty { liveAlertRuleIDs = [] }
+            return
+        }
+        var live = Set<UUID>()
+        for rule in alertRules where rule.enabled {
+            let cpu: Double
+            if rule.appID == "any" {
+                cpu = snapshot.values.map { $0.cpu }.max() ?? 0
+            } else if let app = runningApps.first(where: { $0.id == rule.appID }),
+                      let pid = app.pid,
+                      let snap = snapshot[Int(pid)] {
+                cpu = snap.cpu
+            } else {
+                cpu = 0   // app not running — below threshold, re-arms
+            }
+            var st = alertState[rule.id] ?? (since: Date(), fired: false)
+            if cpu >= rule.threshold {
+                if !st.fired && Date().timeIntervalSince(st.since) >= Double(rule.durationSeconds) {
+                    st.fired = true
+                    fireAlert(rule, cpu: cpu)
+                }
+                live.insert(rule.id)
+            } else {
+                st = (since: Date(), fired: false)
+            }
+            alertState[rule.id] = st
+        }
+        liveAlertRuleIDs = live
+    }
+
+    private func fireAlert(_ rule: AlertRule, cpu: Double) {
+        let appName: String
+        if rule.appID == "any",
+           let hottest = runningApps.filter({ $0.pid != nil }).max(by: { cpuPct($0) < cpuPct($1) }) {
+            appName = hottest.name
+        } else {
+            appName = rule.appName
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "CPU spike — \(appName)"
+        content.body = "\(Int(cpu.rounded()))% CPU — over \(Int(rule.threshold))% for \(rule.durationSeconds)s"
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: rule.id.uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
     }
 
     private func refreshRunningApps() {
@@ -239,59 +336,21 @@ final class UsageStore: ObservableObject {
         usageQueue.async { [weak self] in
             guard let self else { return }
             let now = ProcessInfo.processInfo.systemUptime
+            // Helper processes (Chromium/Electron renderers, network services)
+            // are direct children of the app — their CPU/memory belongs to the
+            // app's row, not to invisible helpers.
+            let ppidMap = Self.allProcessParents()
+            var childrenOf: [Int32: [Int32]] = [:]
+            for (child, parent) in ppidMap where parent != 0 {
+                childrenOf[parent, default: []].append(child)
+            }
             var snapshot: [Int: UsageSnapshot] = [:]
+            var sampledPids = Set<Int>()
             for pid in pids {
-                var info = ProcTaskInfo()
-                let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
-                guard proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sz) == sz else { continue }
-                let total = info.pti_total_user &+ info.pti_total_system
-                var cpu = 0.0
-                if let prev = self.cpuSamples[Int(pid)] {
-                    let dNanos = total >= prev.cpuNanos ? total - prev.cpuNanos : 0
-                    let dWall = now - prev.wall
-                    if dWall > 0 {
-                        cpu = Double(dNanos) / (dWall * 1_000_000_000.0) * 100.0
-                    }
-                }
-                self.cpuSamples[Int(pid)] = (total, now)
-                var snap = UsageSnapshot()
-                snap.cpu = cpu
-                snap.info = info
-                var rusageBuf = [UInt8](repeating: 0, count: 512)
-                if proc_pid_rusage(pid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
-                    func u64(_ off: Int) -> UInt64 { rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: off, as: UInt64.self) } }
-                    let mb = 1024.0 * 1024.0
-                    snap.memMB = Double(u64(72)) / mb
-                    snap.diskReadMB = Double(u64(144)) / mb
-                    snap.diskWriteMB = Double(u64(152)) / mb
-                }
-                // Network: delta-sample nettop's cumulative counters into
-                // monotonic lifetime totals. Direct child helper processes
-                // (Chromium/Electron network services) count toward the app.
-                let ppidMap = Self.allProcessParents()
-                self.netLock.lock()
-                let counters = self.netCounters
-                var childIn: UInt64 = 0
-                var childOut: UInt64 = 0
-                for (child, parent) in ppidMap where parent == pid {
-                    if let k = counters[Int(child)] {
-                        childIn &+= k.curIn
-                        childOut &+= k.curOut
-                    }
-                }
-                let mine = counters[Int(pid)] ?? (0, 0)
-                let curIn = mine.curIn &+ childIn
-                let curOut = mine.curOut &+ childOut
-                var st = self.netState[Int(pid)] ?? (curIn, curOut, 0, 0)
-                let dIn = curIn >= st.lastIn ? curIn &- st.lastIn : 0
-                let dOut = curOut >= st.lastOut ? curOut &- st.lastOut : 0
-                st = (curIn, curOut, st.totIn &+ dIn, st.totOut &+ dOut)
-                self.netState[Int(pid)] = st
-                self.netLock.unlock()
-                snap.netInMB = Double(st.totIn) / 1_048_576.0
-                snap.netOutMB = Double(st.totOut) / 1_048_576.0
+                let snap = self.sampleApp(pid: pid, children: childrenOf[pid] ?? [], now: now, sampledPids: &sampledPids)
                 snapshot[Int(pid)] = snap
             }
+            self.cpuSamples = self.cpuSamples.filter { sampledPids.contains($0.key) }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.usage = snapshot
@@ -309,8 +368,78 @@ final class UsageStore: ObservableObject {
                 self.netState = self.netState.filter { snapshot[$0.key] != nil }
                 self.netCounters = self.netCounters.filter { snapshot[$0.key] != nil }
                 self.netLock.unlock()
+                self.evaluateAlerts(snapshot)
             }
         }
+    }
+
+    private func sampleApp(pid: pid_t, children: [Int32], now: Double, sampledPids: inout Set<Int>) -> UsageSnapshot {
+        var appCpu = 0.0
+        var memMB = 0.0
+        var diskR = 0.0
+        var diskW = 0.0
+        var mainInfo = ProcTaskInfo()
+        var samplePids = [pid]
+        samplePids += children
+        for p in samplePids { sampledPids.insert(Int(p)) }
+        let mb = 1024.0 * 1024.0
+        for samplePid in samplePids {
+            var info = ProcTaskInfo()
+            let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
+            guard proc_pidinfo(samplePid, PROC_PIDTASKINFO, 0, &info, sz) == sz else { continue }
+            let total = info.pti_total_user &+ info.pti_total_system
+            var pidCpu = 0.0
+            if let prev = cpuSamples[Int(samplePid)] {
+                let dNanos = total >= prev.cpuNanos ? total - prev.cpuNanos : 0
+                let dWall = now - prev.wall
+                if dWall > 0 {
+                    pidCpu = Double(dNanos) / (dWall * 1_000_000_000.0) * 100.0
+                }
+            }
+            cpuSamples[Int(samplePid)] = (total, now)
+            appCpu += pidCpu
+            if samplePid == pid { mainInfo = info }
+            var rusageBuf = [UInt8](repeating: 0, count: 512)
+            if proc_pid_rusage(samplePid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
+                let memB = rusageBuf.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 72, as: UInt64.self) }
+                let readB = rusageBuf.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 144, as: UInt64.self) }
+                let writtenB = rusageBuf.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 152, as: UInt64.self) }
+                memMB += Double(memB) / mb
+                diskR += Double(readB) / mb
+                diskW += Double(writtenB) / mb
+            }
+        }
+        var snap = UsageSnapshot()
+        snap.cpu = appCpu
+        snap.info = mainInfo
+        snap.memMB = memMB
+        snap.diskReadMB = diskR
+        snap.diskWriteMB = diskW
+        // Network: delta-sample nettop's cumulative counters into monotonic
+        // lifetime totals; child helper pids count toward the app.
+        let ppidMap = Self.allProcessParents()
+        netLock.lock()
+        let counters = netCounters
+        var childIn: UInt64 = 0
+        var childOut: UInt64 = 0
+        for child in children {
+            if let k = counters[Int(child)] {
+                childIn &+= k.curIn
+                childOut &+= k.curOut
+            }
+        }
+        let mine = counters[Int(pid)] ?? (0, 0)
+        let curIn = mine.curIn &+ childIn
+        let curOut = mine.curOut &+ childOut
+        var st = netState[Int(pid)] ?? (curIn, curOut, 0, 0)
+        let dIn = curIn >= st.lastIn ? curIn &- st.lastIn : 0
+        let dOut = curOut >= st.lastOut ? curOut &- st.lastOut : 0
+        st = (curIn, curOut, st.totIn &+ dIn, st.totOut &+ dOut)
+        netState[Int(pid)] = st
+        netLock.unlock()
+        snap.netInMB = Double(st.totIn) / 1_048_576.0
+        snap.netOutMB = Double(st.totOut) / 1_048_576.0
+        return snap
     }
 }
 
@@ -514,6 +643,11 @@ final class NotchController: NSObject {
 }
 
 struct NotchCollapsedView: View {
+    @ObservedObject private var store = UsageStore.shared
+    @State private var pulse = false
+
+    private var alertActive: Bool { !store.liveAlertRuleIDs.isEmpty }
+
     var body: some View {
         ZStack {
             Color.black
@@ -522,6 +656,18 @@ struct NotchCollapsedView: View {
                 .interpolation(.high)
                 .frame(width: 16, height: 16)
                 .opacity(0.9)
+                .scaleEffect(alertActive && pulse ? 1.3 : 1.0)
+                .opacity(alertActive && pulse ? 1.0 : (alertActive ? 0.55 : 0.9))
+                .onChange(of: store.liveAlertRuleIDs) { _, live in
+                    pulse = false
+                    if !live.isEmpty {
+                        withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
+                            pulse = true
+                        }
+                    } else {
+                        pulse = false
+                    }
+                }
         }
         .onHover { hovering in
             if hovering { NotchController.shared.beginDwell() }
@@ -568,6 +714,7 @@ final class MenubarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     let menu = NSMenu()
     private let closer = MainWindowCloser()
+    private var cancellables = Set<AnyCancellable>()
 
     private func cpuPct(_ app: AppEntry) -> Double {
         (app.pid.flatMap { UsageStore.shared.usage[Int($0)]?.cpu }) ?? 0
@@ -613,6 +760,13 @@ final class MenubarController: NSObject, NSMenuDelegate {
             if statusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
                 item.button?.image = Self.menuBarLogoIcon()
+                // Warm tint while any CPU-spike alert is live
+                UsageStore.shared.$liveAlertRuleIDs
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak self] live in
+                        self?.statusItem?.button?.contentTintColor = live.isEmpty ? nil : .systemOrange
+                    }
+                    .store(in: &cancellables)
                 menu.delegate = self
                 menu.autoenablesItems = false
                 item.menu = menu
@@ -704,6 +858,7 @@ struct CubManagerApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(store)
         }
     }
 }
@@ -715,6 +870,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppDelegate.applyDockIcon()
         MenubarController.shared.apply()
         NotchController.shared.apply()
+        UNUserNotificationCenter.current().delegate = self
         DispatchQueue.main.async {
             for window in NSApp.windows where window.level == .normal {
                 window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
@@ -738,7 +894,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+}
+
 struct SettingsView: View {
+    @EnvironmentObject private var store: UsageStore
     @AppStorage("menubarEnabled") private var menubarEnabled = true
     @AppStorage("dockIconVisible") private var dockIconVisible = true
     @AppStorage("notchEnabled") private var notchEnabled = false
@@ -770,6 +934,60 @@ struct SettingsView: View {
                     Text("Every second").tag(1.0)
                     Text("Every 2 seconds").tag(2.0)
                     Text("Every 5 seconds").tag(5.0)
+                }
+            }
+            Section("CPU alerts") {
+                if store.alertRules.isEmpty {
+                    Text("Get notified when an app runs hot for too long.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                ForEach($store.alertRules) { $rule in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Toggle("", isOn: $rule.enabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                            Picker("", selection: $rule.appID) {
+                                Text("Any app").tag("any")
+                                ForEach(store.runningApps) { app in
+                                    Text(app.name).tag(app.id)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 120)
+                            Spacer()
+                            Button {
+                                store.removeAlertRule(rule.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        HStack(spacing: 8) {
+                            Stepper(value: $rule.threshold, in: 10...400, step: 10) {
+                                Text("≥ \(Int(rule.threshold))% CPU")
+                            }
+                            .fixedSize()
+                            Spacer()
+                            Picker("", selection: $rule.durationSeconds) {
+                                Text("10s").tag(10)
+                                Text("30s").tag(30)
+                                Text("60s").tag(60)
+                                Text("2m").tag(120)
+                            }
+                            .labelsHidden()
+                            .frame(width: 70)
+                        }
+                    }
+                    .onChange(of: rule) { _, _ in
+                        store.saveAlertRules()
+                    }
+                }
+                Button("Add alert…") {
+                    store.addAlertRule()
                 }
             }
             Section("About") {
