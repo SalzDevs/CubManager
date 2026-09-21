@@ -74,6 +74,7 @@ struct AppEntry: Identifiable {
     let icon: NSImage?
     let url: URL?           // .app bundle URL for launch
     let pid: pid_t?
+    let launchDate: Date?
     var isRunning: Bool { pid != nil }
 }
 
@@ -164,7 +165,8 @@ struct ContentView: View {
                 guard let name = app.localizedName else { return nil }
                 let id = app.bundleIdentifier ?? "pid-\(app.processIdentifier)"
                 return AppEntry(id: id, name: name, icon: app.icon,
-                                url: app.bundleURL, pid: app.processIdentifier)
+                                url: app.bundleURL, pid: app.processIdentifier,
+                                launchDate: app.launchDate)
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -196,7 +198,7 @@ struct ContentView: View {
                     seen.insert(bid)
                     result.append(AppEntry(id: bid, name: name,
                                            icon: NSWorkspace.shared.icon(forFile: u.path),
-                                           url: u, pid: nil))
+                                           url: u, pid: nil, launchDate: nil))
                 }
             }
             let sorted = result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -235,6 +237,15 @@ struct ContentView: View {
         memMB >= 1024 ? String(format: "%.1f GB", memMB / 1024) : String(format: "%.0f MB", memMB)
     }
 
+    private func uptimeString(_ date: Date?) -> String {
+        guard let date else { return "–" }
+        let secs = max(0, Int(Date().timeIntervalSince(date)))
+        let d = secs / 86400, h = (secs % 86400) / 3600, m = (secs % 3600) / 60
+        if d > 0 { return "\(d)d \(h)h" }
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
+    }
+
     private func cpuColor(_ cpu: Double) -> Color {
         if cpu >= 200 { return Color.orange.opacity(0.9) }
         if cpu >= 100 { return Color.yellow.opacity(0.75) }
@@ -248,7 +259,6 @@ struct ContentView: View {
     private func fmtK(_ v: Double) -> String {
         v >= 1000 ? String(format: "%.1fk", v / 1000) : String(format: "%.0f", v)
     }
-
     private func metric(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -319,7 +329,7 @@ struct ContentView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(1)
-                    Text("\(version ?? "–") · \(bid)")
+                    Text("\(version ?? "–") · \(bid) · PID \(app.pid ?? 0)")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.4))
                         .lineLimit(1)
@@ -356,14 +366,10 @@ struct ContentView: View {
             ], alignment: .leading, spacing: 12) {
                 metric("CPU", String(format: "%.1f%%", u?.cpu ?? 0))
                 metric("MEM", memString(u?.memMB ?? 0))
+                metric("UPTIME", uptimeString(app.launchDate))
                 metric("THREADS", "\(u?.info.pti_threadnum ?? 0)")
                 metric("DISK R", memString(u?.diskReadMB ?? 0))
                 metric("DISK W", memString(u?.diskWriteMB ?? 0))
-                metric("PAGEINS", "\(u?.info.pti_pageins ?? 0)")
-                metric("FAULTS", fmtK(Double(u?.info.pti_faults ?? 0)))
-                metric("SYSCALLS", fmtK(Double(u?.info.pti_syscalls_mach ?? 0) + Double(u?.info.pti_syscalls_unix ?? 0)))
-                metric("CTX SW", fmtK(Double(u?.info.pti_csw ?? 0)))
-                metric("PID", "\(app.pid ?? 0)")
             }
         }
         .padding(.horizontal, 14)
