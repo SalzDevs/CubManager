@@ -357,13 +357,34 @@ final class MenubarController: NSObject, NSMenuDelegate {
         (app.pid.flatMap { UsageStore.shared.usage[Int($0)]?.cpu }) ?? 0
     }
 
+    /// Custom menu bar mark: bear-head silhouette (matches the app logo).
+    /// Template image = macOS tints it for light/dark menu bars automatically.
+    static func bearMenuBarIcon() -> NSImage {
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            // head
+            NSBezierPath(ovalIn: NSRect(x: 4.0, y: 1.6, width: 10.0, height: 9.8)).fill()
+            // ears — clearly separated above the head
+            NSBezierPath(ovalIn: NSRect(x: 2.2, y: 9.8, width: 5.2, height: 5.2)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 10.6, y: 9.8, width: 5.2, height: 5.2)).fill()
+            // inner-ear cutouts
+            if let ctx = NSGraphicsContext.current {
+                ctx.compositingOperation = .clear
+                NSBezierPath(ovalIn: NSRect(x: 3.5, y: 11.0, width: 2.6, height: 2.6)).fill()
+                NSBezierPath(ovalIn: NSRect(x: 11.9, y: 11.0, width: 2.6, height: 2.6)).fill()
+                ctx.compositingOperation = .sourceOver
+            }
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }
+
     func apply() {
         let enabled = UserDefaults.standard.object(forKey: "menubarEnabled") as? Bool ?? true
         if enabled {
             if statusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-                item.button?.image = NSImage(systemSymbolName: "gauge.with.needle",
-                                             accessibilityDescription: "CubManager")
+                item.button?.image = Self.bearMenuBarIcon()
                 menu.delegate = self
                 menu.autoenablesItems = false
                 item.menu = menu
@@ -871,8 +892,9 @@ struct ContentView: View {
                         .font(.system(size: 12, weight: .medium))
                 }
                 .help("Settings")
-                // Align with the native traffic-light buttons (center ≈ 14pt)
-                .offset(y: -6)
+                // Center-aligns with the traffic-light close/expand buttons
+                // (their center sits 16pt from the window top, measured)
+                .offset(y: -4)
             }
             .padding(.horizontal, 14)
             .frame(height: minRowHeight)
