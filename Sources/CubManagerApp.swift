@@ -357,6 +357,18 @@ final class MenubarController: NSObject, NSMenuDelegate {
         (app.pid.flatMap { UsageStore.shared.usage[Int($0)]?.cpu }) ?? 0
     }
 
+    /// The actual logo artwork as the menu bar mark (18pt, colored —
+    /// not a template so the navy bear + cream face keep their identity).
+    /// Falls back to the hand-drawn bear silhouette if the asset is missing.
+    static func menuBarLogoIcon() -> NSImage {
+        if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.size = NSSize(width: 18, height: 18)   // 36px rep renders at 2x
+            return img
+        }
+        return bearMenuBarIcon()
+    }
+
     /// Custom menu bar mark: bear-head silhouette (matches the app logo).
     /// Template image = macOS tints it for light/dark menu bars automatically.
     static func bearMenuBarIcon() -> NSImage {
@@ -384,7 +396,7 @@ final class MenubarController: NSObject, NSMenuDelegate {
         if enabled {
             if statusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-                item.button?.image = Self.bearMenuBarIcon()
+                item.button?.image = Self.menuBarLogoIcon()
                 menu.delegate = self
                 menu.autoenablesItems = false
                 item.menu = menu

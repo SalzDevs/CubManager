@@ -34,6 +34,7 @@ mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 swiftc -parse-as-library -O "$SRC" -o "$BUNDLE/Contents/MacOS/$APP_NAME"
 
 cp "$ICNS" "$BUNDLE/Contents/Resources/$ICNS"
+cp "Assets/MenuBarIcon.png" "$BUNDLE/Contents/Resources/MenuBarIcon.png"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
