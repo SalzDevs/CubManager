@@ -84,6 +84,8 @@ struct UsageSnapshot {
     var info = ProcTaskInfo()
     var diskReadMB: Double = 0
     var diskWriteMB: Double = 0
+    var netInMB: Double = 0
+    var netOutMB: Double = 0
 }
 
 struct Sparkline: View {
@@ -110,6 +112,75 @@ struct ContentView: View {
     private let minRowHeight: CGFloat = 40
     private static let usageQueue = DispatchQueue(label: "cubmanager.usage")
     private static var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
+
+    // Per-app network via /usr/bin/nettop (no public per-app API): one persistent
+    // CSV-streaming nettop feeds cumulative bytes_in/out per pid; we delta-sample
+    // into monotonic lifetime totals so closed sockets don't erase history.
+    private static let netQueue = DispatchQueue(label: "cubmanager.nettop", qos: .utility)
+    private static let netLock = NSLock()
+    private static var netCounters: [Int: (curIn: UInt64, curOut: UInt64)] = [:]
+    private static var netState: [Int: (lastIn: UInt64, lastOut: UInt64, totIn: UInt64, totOut: UInt64)] = [:]
+    private static var nettopProcess: Process?
+
+    private static func startNettopMonitor() {
+        Self.netLock.lock()
+        defer { Self.netLock.unlock() }
+        if let p = nettopProcess, p.isRunning { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        // nettop block-buffers to pipes and flushes nothing until exit; run it
+        // under a pseudo-tty (script) so each 1s snapshot is flushed to us.
+        p.arguments = ["-q", "/dev/null", "/usr/bin/nettop", "-L", "-x", "-P", "-n", "-s", "1"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return }
+        nettopProcess = p
+        let fh = pipe.fileHandleForReading
+        netQueue.async {
+            var buf = Data()
+            while p.isRunning {
+                let d = fh.availableData
+                if d.isEmpty { break }
+                buf.append(d)
+                while let nl = buf.firstRange(of: Data([0x0A])) {
+                    let line = String(decoding: buf[buf.startIndex..<nl.lowerBound], as: UTF8.self)
+                    buf.removeSubrange(buf.startIndex..<nl.upperBound)
+                    Self.parseNettopLine(line)
+                }
+            }
+        }
+    }
+
+    // All processes' parent pids via sysctl. Third-party helpers (Chromium/Electron
+    // network services) are direct children of the app; Apple's XPC services are
+    // reparented to launchd and can't be attributed with public API.
+    private static func allProcessParents() -> [Int32: Int32] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [:] }
+        var infos = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
+        guard sysctl(&mib, 4, &infos, &size, nil, 0) == 0, size > 0 else { return [:] }
+        var map: [Int32: Int32] = [:]
+        for i in 0..<(size / MemoryLayout<kinfo_proc>.stride) {
+            map[infos[i].kp_proc.p_pid] = infos[i].kp_eproc.e_ppid
+        }
+        return map
+    }
+
+    private static func parseNettopLine(_ line: String) {
+        let cols = line.components(separatedBy: ",")
+        guard cols.count >= 6 else { return }
+        let proc = cols[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let dot = proc.lastIndex(of: "."),
+              let pid = Int(proc[proc.index(after: dot)...]), pid > 0 else { return }
+        let bin = cols[4].trimmingCharacters(in: .whitespacesAndNewlines)
+        let bout = cols[5].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let bi = UInt64(bin), let bo = UInt64(bout) else { return }
+        Self.netLock.lock()
+        Self.netCounters[pid] = (bi, bo)
+        Self.netLock.unlock()
+    }
 
     @State private var runningApps: [AppEntry] = []
     @State private var installedApps: [AppEntry] = []
@@ -370,6 +441,8 @@ struct ContentView: View {
                 metric("THREADS", "\(u?.info.pti_threadnum ?? 0)")
                 metric("DISK R", memString(u?.diskReadMB ?? 0))
                 metric("DISK W", memString(u?.diskWriteMB ?? 0))
+                metric("NET IN", memString(u?.netInMB ?? 0))
+                metric("NET OUT", memString(u?.netOutMB ?? 0))
             }
         }
         .padding(.horizontal, 14)
@@ -437,6 +510,31 @@ struct ContentView: View {
                     snap.diskReadMB = Double(u64(144)) / mb
                     snap.diskWriteMB = Double(u64(152)) / mb
                 }
+                // Network: delta-sample nettop's cumulative counters into
+                // monotonic lifetime totals. Direct child helper processes
+                // (Chromium/Electron network services) count toward the app.
+                let ppidMap = Self.allProcessParents()
+                Self.netLock.lock()
+                let counters = Self.netCounters
+                var childIn: UInt64 = 0
+                var childOut: UInt64 = 0
+                for (child, parent) in ppidMap where parent == pid {
+                    if let k = counters[Int(child)] {
+                        childIn &+= k.curIn
+                        childOut &+= k.curOut
+                    }
+                }
+                let mine = counters[Int(pid)] ?? (0, 0)
+                let curIn = mine.curIn &+ childIn
+                let curOut = mine.curOut &+ childOut
+                var st = Self.netState[Int(pid)] ?? (curIn, curOut, 0, 0)
+                let dIn = curIn >= st.lastIn ? curIn &- st.lastIn : 0
+                let dOut = curOut >= st.lastOut ? curOut &- st.lastOut : 0
+                st = (curIn, curOut, st.totIn &+ dIn, st.totOut &+ dOut)
+                Self.netState[Int(pid)] = st
+                Self.netLock.unlock()
+                snap.netInMB = Double(st.totIn) / 1_048_576.0
+                snap.netOutMB = Double(st.totOut) / 1_048_576.0
                 snapshot[Int(pid)] = snap
             }
             DispatchQueue.main.async {
@@ -450,6 +548,11 @@ struct ContentView: View {
                 }
                 newHist = newHist.filter { snapshot[$0.key] != nil }
                 history = newHist
+                // prune net state for dead pids
+                Self.netLock.lock()
+                Self.netState = Self.netState.filter { snapshot[$0.key] != nil }
+                Self.netCounters = Self.netCounters.filter { snapshot[$0.key] != nil }
+                Self.netLock.unlock()
             }
         }
     }
@@ -649,6 +752,7 @@ struct ContentView: View {
             refreshRunningApps()
             loadInstalledApps()
             refreshUsage()
+            Self.startNettopMonitor()
             Timer.publish(every: 1.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { _ in refreshUsage() }
