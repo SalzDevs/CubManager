@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import ServiceManagement
 
 private let PROC_PIDTASKINFO: Int32 = 4
 private let RUSAGE_INFO_V2: Int32 = 2
@@ -32,42 +33,6 @@ private func proc_pidinfo(_ pid: Int32, _ flavor: Int32, _ arg: UInt64, _ buffer
 @_silgen_name("proc_pid_rusage")
 private func proc_pid_rusage(_ pid: Int32, _ flavor: Int32, _ buffer: UnsafeMutableRawPointer?) -> Int32
 
-@main
-struct CubManagerApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        // Single window: WindowGroup restores duplicate windows on relaunch
-        Window("CubManager", id: "main") {
-            ContentView()
-                .frame(minWidth: 320, minHeight: 420)
-                .navigationTitle("CubManager")
-                .background(Color.black)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .restorationBehavior(.disabled)
-    }
-}
-
-class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Bare-binary launch (not a .app bundle) needs explicit regular activation
-        // or the window never becomes key -> TextField ignores keyboard.
-        NSApp.setActivationPolicy(.regular)
-        DispatchQueue.main.async {
-            for window in NSApp.windows where window.level == .normal {
-                window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
-                window.collectionBehavior = [.fullScreenNone]
-                window.isMovableByWindowBackground = true
-                window.setContentSize(NSSize(width: 320, height: 420))
-                window.center()
-                window.makeKeyAndOrderFront(nil)
-            }
-            NSApp.activate()
-        }
-    }
-}
-
 struct AppEntry: Identifiable {
     let id: String          // bundle id, fallback path
     let name: String
@@ -88,144 +53,60 @@ struct UsageSnapshot {
     var netOutMB: Double = 0
 }
 
-struct Sparkline: View {
-    let samples: [Double]
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let maxV = max(100.0, samples.max() ?? 100.0)
-            Path { p in
-                guard samples.count > 1, w > 0, h > 0 else { return }
-                for (i, s) in samples.enumerated() {
-                    let x = w * CGFloat(i) / CGFloat(samples.count - 1)
-                    let y = h - min(h, h * CGFloat(s / maxV))
-                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
-                }
-            }
-            .stroke(Color.white.opacity(0.4), lineWidth: 1.5)
-        }
-    }
-}
+// Single source of truth for app lists + live usage. Consumed by the
+// window UI and the menu bar item.
+final class UsageStore: ObservableObject {
+    static let shared = UsageStore()
 
-struct ContentView: View {
-    private let minRowHeight: CGFloat = 40
-    private static let usageQueue = DispatchQueue(label: "cubmanager.usage")
-    private static var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
+    @Published var runningApps: [AppEntry] = []
+    @Published var installedApps: [AppEntry] = []
+    @Published var usage: [Int: UsageSnapshot] = [:]
+    @Published var history: [Int: [Double]] = [:]
+
+    private let usageQueue = DispatchQueue(label: "cubmanager.usage")
+    private var cpuSamples: [Int: (cpuNanos: UInt64, wall: Double)] = [:]
 
     // Per-app network via /usr/bin/nettop (no public per-app API): one persistent
     // CSV-streaming nettop feeds cumulative bytes_in/out per pid; we delta-sample
     // into monotonic lifetime totals so closed sockets don't erase history.
-    private static let netQueue = DispatchQueue(label: "cubmanager.nettop", qos: .utility)
-    private static let netLock = NSLock()
-    private static var netCounters: [Int: (curIn: UInt64, curOut: UInt64)] = [:]
-    private static var netState: [Int: (lastIn: UInt64, lastOut: UInt64, totIn: UInt64, totOut: UInt64)] = [:]
-    private static var nettopProcess: Process?
+    private let netQueue = DispatchQueue(label: "cubmanager.nettop", qos: .utility)
+    private let netLock = NSLock()
+    private var netCounters: [Int: (curIn: UInt64, curOut: UInt64)] = [:]
+    private var netState: [Int: (lastIn: UInt64, lastOut: UInt64, totIn: UInt64, totOut: UInt64)] = [:]
+    private var nettopProcess: Process?
 
-    private static func startNettopMonitor() {
-        Self.netLock.lock()
-        defer { Self.netLock.unlock() }
-        if let p = nettopProcess, p.isRunning { return }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
-        // nettop block-buffers to pipes and flushes nothing until exit; run it
-        // under a pseudo-tty (script) so each 1s snapshot is flushed to us.
-        p.arguments = ["-q", "/dev/null", "/usr/bin/nettop", "-L", "-x", "-P", "-n", "-s", "1"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return }
-        nettopProcess = p
-        let fh = pipe.fileHandleForReading
-        netQueue.async {
-            var buf = Data()
-            while p.isRunning {
-                let d = fh.availableData
-                if d.isEmpty { break }
-                buf.append(d)
-                while let nl = buf.firstRange(of: Data([0x0A])) {
-                    let line = String(decoding: buf[buf.startIndex..<nl.lowerBound], as: UTF8.self)
-                    buf.removeSubrange(buf.startIndex..<nl.upperBound)
-                    Self.parseNettopLine(line)
-                }
-            }
-        }
+    private var cancellables = Set<AnyCancellable>()
+    private var lastRefresh = Date.distantPast
+
+    private init() {
+        // 0.5s cadence; the configured refresh interval gates the heavy pass.
+        Timer.publish(every: 0.5, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.maybeRefreshUsage() }
+            .store(in: &cancellables)
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.didLaunchApplicationNotification)
+            .merge(with: NSWorkspace.shared.notificationCenter
+                .publisher(for: NSWorkspace.didTerminateApplicationNotification))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshRunningApps() }
+            .store(in: &cancellables)
+        refreshRunningApps()
+        loadInstalledApps()
+        startNettopMonitor()
+        refreshUsage()
+        lastRefresh = Date()
     }
 
-    // All processes' parent pids via sysctl. Third-party helpers (Chromium/Electron
-    // network services) are direct children of the app; Apple's XPC services are
-    // reparented to launchd and can't be attributed with public API.
-    private static func allProcessParents() -> [Int32: Int32] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var size = 0
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [:] }
-        var infos = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
-        guard sysctl(&mib, 4, &infos, &size, nil, 0) == 0, size > 0 else { return [:] }
-        var map: [Int32: Int32] = [:]
-        for i in 0..<(size / MemoryLayout<kinfo_proc>.stride) {
-            map[infos[i].kp_proc.p_pid] = infos[i].kp_eproc.e_ppid
-        }
-        return map
+    private func maybeRefreshUsage() {
+        let interval = UserDefaults.standard.object(forKey: "refreshInterval") as? Double ?? 1.0
+        guard Date().timeIntervalSince(lastRefresh) >= interval else { return }
+        lastRefresh = Date()
+        refreshUsage()
     }
 
-    private static func parseNettopLine(_ line: String) {
-        let cols = line.components(separatedBy: ",")
-        guard cols.count >= 6 else { return }
-        let proc = cols[1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let dot = proc.lastIndex(of: "."),
-              let pid = Int(proc[proc.index(after: dot)...]), pid > 0 else { return }
-        let bin = cols[4].trimmingCharacters(in: .whitespacesAndNewlines)
-        let bout = cols[5].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let bi = UInt64(bin), let bo = UInt64(bout) else { return }
-        Self.netLock.lock()
-        Self.netCounters[pid] = (bi, bo)
-        Self.netLock.unlock()
-    }
-
-    @State private var runningApps: [AppEntry] = []
-    @State private var installedApps: [AppEntry] = []
-    @State private var hoveredAppID: String? = nil
-    @State private var hoveredQuitID: String? = nil
-    @State private var hoveredOpenID: String? = nil
-    @State private var hoveredChevronID: String? = nil
-    @State private var cancellables = Set<AnyCancellable>()
-    @State private var query: String = ""
-    @State private var usage: [Int: UsageSnapshot] = [:]
-    @State private var history: [Int: [Double]] = [:]
-    @State private var expandedID: String? = nil
-    @FocusState private var isSearchFocused: Bool
-
-    private var trimmedQuery: String {
-        query.trimmingCharacters(in: .whitespaces)
-    }
-
-    private var displayedApps: [AppEntry] {
-        if trimmedQuery.isEmpty { return runningApps }
-        return installedApps.filter {
-            $0.name.localizedCaseInsensitiveContains(trimmedQuery)
-                || $0.id.localizedCaseInsensitiveContains(trimmedQuery)
-        }
-    }
-
-    private var runningIDs: Set<String> {
-        Set(runningApps.map(\.id))
-    }
-
-    private func highlightedText(_ name: String, query q: String) -> AttributedString {
-        var attr = AttributedString(name)
-        attr.foregroundColor = .white.opacity(0.85)
-        guard !q.isEmpty else { return attr }
-        var index = name.startIndex
-        while index < name.endIndex {
-            guard let r = name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], range: index..<name.endIndex) else { break }
-            let lower = name.distance(from: name.startIndex, to: r.lowerBound)
-            let upper = name.distance(from: name.startIndex, to: r.upperBound)
-            if let ar = Range(NSRange(location: lower, length: upper - lower), in: attr) {
-                attr[ar].foregroundColor = .white
-            }
-            index = r.upperBound
-        }
-        return attr
+    func cpuPct(_ app: AppEntry) -> Double {
+        (app.pid.flatMap { usage[Int($0)]?.cpu }) ?? 0
     }
 
     private func refreshRunningApps() {
@@ -273,8 +154,461 @@ struct ContentView: View {
                 }
             }
             let sorted = result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            DispatchQueue.main.async { installedApps = sorted }
+            DispatchQueue.main.async { self.installedApps = sorted }
         }
+    }
+
+    func openApp(_ app: AppEntry) {
+        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
+            running.activate(options: [.activateAllWindows])
+        } else if let url = app.url {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func quitApp(_ app: AppEntry) {
+        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
+            running.terminate()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refreshRunningApps() }
+        refreshRunningApps()
+    }
+
+    // All processes' parent pids via sysctl. Third-party helpers (Chromium/Electron
+    // network services) are direct children of the app; Apple's XPC services are
+    // reparented to launchd and can't be attributed with public API.
+    private static func allProcessParents() -> [Int32: Int32] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [:] }
+        var infos = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
+        guard sysctl(&mib, 4, &infos, &size, nil, 0) == 0, size > 0 else { return [:] }
+        var map: [Int32: Int32] = [:]
+        for i in 0..<(size / MemoryLayout<kinfo_proc>.stride) {
+            map[infos[i].kp_proc.p_pid] = infos[i].kp_eproc.e_ppid
+        }
+        return map
+    }
+
+    private func startNettopMonitor() {
+        netLock.lock()
+        defer { netLock.unlock() }
+        if let p = nettopProcess, p.isRunning { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        // nettop block-buffers to pipes and flushes nothing until exit; run it
+        // under a pseudo-tty (script) so each 1s snapshot is flushed to us.
+        p.arguments = ["-q", "/dev/null", "/usr/bin/nettop", "-L", "-x", "-P", "-n", "-s", "1"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return }
+        nettopProcess = p
+        let fh = pipe.fileHandleForReading
+        netQueue.async {
+            var buf = Data()
+            while p.isRunning {
+                let d = fh.availableData
+                if d.isEmpty { break }
+                buf.append(d)
+                while let nl = buf.firstRange(of: Data([0x0A])) {
+                    let line = String(decoding: buf[buf.startIndex..<nl.lowerBound], as: UTF8.self)
+                    buf.removeSubrange(buf.startIndex..<nl.upperBound)
+                    self.parseNettopLine(line)
+                }
+            }
+        }
+    }
+
+    private func parseNettopLine(_ line: String) {
+        let cols = line.components(separatedBy: ",")
+        guard cols.count >= 6 else { return }
+        let proc = cols[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let dot = proc.lastIndex(of: "."),
+              let pid = Int(proc[proc.index(after: dot)...]), pid > 0 else { return }
+        let bin = cols[4].trimmingCharacters(in: .whitespacesAndNewlines)
+        let bout = cols[5].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let bi = UInt64(bin), let bo = UInt64(bout) else { return }
+        netLock.lock()
+        netCounters[pid] = (bi, bo)
+        netLock.unlock()
+    }
+
+    private func refreshUsage() {
+        let pids = runningApps.compactMap { $0.pid }
+        usageQueue.async { [weak self] in
+            guard let self else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            var snapshot: [Int: UsageSnapshot] = [:]
+            for pid in pids {
+                var info = ProcTaskInfo()
+                let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
+                guard proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sz) == sz else { continue }
+                let total = info.pti_total_user &+ info.pti_total_system
+                var cpu = 0.0
+                if let prev = self.cpuSamples[Int(pid)] {
+                    let dNanos = total >= prev.cpuNanos ? total - prev.cpuNanos : 0
+                    let dWall = now - prev.wall
+                    if dWall > 0 {
+                        cpu = Double(dNanos) / (dWall * 1_000_000_000.0) * 100.0
+                    }
+                }
+                self.cpuSamples[Int(pid)] = (total, now)
+                var snap = UsageSnapshot()
+                snap.cpu = cpu
+                snap.info = info
+                var rusageBuf = [UInt8](repeating: 0, count: 512)
+                if proc_pid_rusage(pid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
+                    func u64(_ off: Int) -> UInt64 { rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: off, as: UInt64.self) } }
+                    let mb = 1024.0 * 1024.0
+                    snap.memMB = Double(u64(72)) / mb
+                    snap.diskReadMB = Double(u64(144)) / mb
+                    snap.diskWriteMB = Double(u64(152)) / mb
+                }
+                // Network: delta-sample nettop's cumulative counters into
+                // monotonic lifetime totals. Direct child helper processes
+                // (Chromium/Electron network services) count toward the app.
+                let ppidMap = Self.allProcessParents()
+                self.netLock.lock()
+                let counters = self.netCounters
+                var childIn: UInt64 = 0
+                var childOut: UInt64 = 0
+                for (child, parent) in ppidMap where parent == pid {
+                    if let k = counters[Int(child)] {
+                        childIn &+= k.curIn
+                        childOut &+= k.curOut
+                    }
+                }
+                let mine = counters[Int(pid)] ?? (0, 0)
+                let curIn = mine.curIn &+ childIn
+                let curOut = mine.curOut &+ childOut
+                var st = self.netState[Int(pid)] ?? (curIn, curOut, 0, 0)
+                let dIn = curIn >= st.lastIn ? curIn &- st.lastIn : 0
+                let dOut = curOut >= st.lastOut ? curOut &- st.lastOut : 0
+                st = (curIn, curOut, st.totIn &+ dIn, st.totOut &+ dOut)
+                self.netState[Int(pid)] = st
+                self.netLock.unlock()
+                snap.netInMB = Double(st.totIn) / 1_048_576.0
+                snap.netOutMB = Double(st.totOut) / 1_048_576.0
+                snapshot[Int(pid)] = snap
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.usage = snapshot
+                var newHist = self.history
+                for (pid, s) in snapshot {
+                    var h = newHist[pid] ?? []
+                    h.append(s.cpu)
+                    if h.count > 60 { h.removeFirst(h.count - 60) }
+                    newHist[pid] = h
+                }
+                newHist = newHist.filter { snapshot[$0.key] != nil }
+                self.history = newHist
+                // prune net state for dead pids
+                self.netLock.lock()
+                self.netState = self.netState.filter { snapshot[$0.key] != nil }
+                self.netCounters = self.netCounters.filter { snapshot[$0.key] != nil }
+                self.netLock.unlock()
+            }
+        }
+    }
+}
+
+// Weak ref to the main window (the window is never destroyed — see AppDelegate)
+final class MainWindowRef {
+    static weak var window: NSWindow?
+}
+
+struct WindowTracker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = TrackerView()
+        return v
+    }
+    func updateNSView(_ view: NSView, context: Context) {
+        MainWindowRef.window = view.window
+    }
+
+    final class TrackerView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            MainWindowRef.window = window
+        }
+    }
+}
+
+// Red X hides the window instead of destroying it — the app keeps running in
+// the menu bar and "Open CubManager" summons it back.
+final class MainWindowCloser: NSObject, NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+}
+
+// Menu bar item: top CPU hogs + open/settings/quit. Rebuilt on each open.
+final class MenubarController: NSObject, NSMenuDelegate {
+    static let shared = MenubarController()
+
+    private var statusItem: NSStatusItem?
+    let menu = NSMenu()
+    private let closer = MainWindowCloser()
+
+    private func cpuPct(_ app: AppEntry) -> Double {
+        (app.pid.flatMap { UsageStore.shared.usage[Int($0)]?.cpu }) ?? 0
+    }
+
+    func apply() {
+        let enabled = UserDefaults.standard.object(forKey: "menubarEnabled") as? Bool ?? true
+        if enabled {
+            if statusItem == nil {
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+                item.button?.image = NSImage(systemSymbolName: "chart.bar.fill",
+                                             accessibilityDescription: "CubManager")
+                menu.delegate = self
+                menu.autoenablesItems = false
+                item.menu = menu
+                statusItem = item
+            }
+        } else if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let store = UsageStore.shared
+        let hogs = Array(
+            store.runningApps
+                .filter { $0.pid != nil }
+                .sorted { cpuPct($0) > cpuPct($1) }
+                .prefix(3)
+        )
+        if hogs.isEmpty {
+            let none = NSMenuItem(title: "No running apps", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        } else {
+            for app in hogs {
+                let item = NSMenuItem(title: "\(app.name) — \(String(format: "%.1f%%", cpuPct(app)))",
+                                      action: #selector(activateHog(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = app.pid
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
+
+        let open = NSMenuItem(title: "Open CubManager", action: #selector(openMainWindow), keyEquivalent: "o")
+        open.target = self
+        menu.addItem(open)
+
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsPanel), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "Quit CubManager",
+                              action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
+    }
+
+    @objc private func activateHog(_ sender: NSMenuItem) {
+        guard let pid = sender.representedObject as? pid_t,
+              let app = UsageStore.shared.runningApps.first(where: { $0.pid == pid }) else { return }
+        UsageStore.shared.openApp(app)
+    }
+
+    @objc private func openMainWindow() {
+        guard let w = MainWindowRef.window else { return }
+        NSApp.activate()
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func openSettingsPanel() {
+        // SwiftUI Settings scene responder action
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate()
+    }
+}
+
+@main
+struct CubManagerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var store = UsageStore.shared
+
+    var body: some Scene {
+        // Single window: WindowGroup restores duplicate windows on relaunch
+        Window("CubManager", id: "main") {
+            ContentView()
+                .frame(minWidth: 320, minHeight: 420)
+                .navigationTitle("CubManager")
+                .background(Color.black)
+                .background(WindowTracker())
+                .environmentObject(store)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .restorationBehavior(.disabled)
+
+        Settings {
+            SettingsView()
+        }
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    let closer = MainWindowCloser()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.applyDockIcon()
+        MenubarController.shared.apply()
+        DispatchQueue.main.async {
+            for window in NSApp.windows where window.level == .normal {
+                window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
+                window.collectionBehavior = [.fullScreenNone]
+                window.isMovableByWindowBackground = true
+                window.setContentSize(NSSize(width: 320, height: 420))
+                window.center()
+                window.delegate = self.closer
+                window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.activate()
+        }
+    }
+
+    // Keep running with no windows (menu-bar mode)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    static func applyDockIcon() {
+        let visible = UserDefaults.standard.object(forKey: "dockIconVisible") as? Bool ?? true
+        NSApp.setActivationPolicy(visible ? .regular : .accessory)
+    }
+}
+
+struct SettingsView: View {
+    @AppStorage("menubarEnabled") private var menubarEnabled = true
+    @AppStorage("dockIconVisible") private var dockIconVisible = true
+    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("refreshInterval") private var refreshInterval = 1.0
+
+    var body: some View {
+        Form {
+            Section("General") {
+                Toggle("Show in menu bar", isOn: $menubarEnabled)
+                Toggle("Show Dock icon", isOn: $dockIconVisible)
+                    .disabled(!menubarEnabled)
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                Picker("Refresh rate", selection: $refreshInterval) {
+                    Text("Every second").tag(1.0)
+                    Text("Every 2 seconds").tag(2.0)
+                    Text("Every 5 seconds").tag(5.0)
+                }
+            }
+            Section("About") {
+                HStack(spacing: 12) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
+                        .resizable()
+                        .frame(width: 36, height: 36)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("CubManager")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("v\(version) · SalzDevs")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 380, height: 300)
+        .onChange(of: launchAtLogin) { _, on in
+            do {
+                if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                launchAtLogin = !on
+            }
+        }
+        .onChange(of: dockIconVisible) { _, _ in
+            AppDelegate.applyDockIcon()
+        }
+        .onChange(of: menubarEnabled) { _, on in
+            // Without a Dock icon the menu bar is the only way back in.
+            if !on { dockIconVisible = true }
+            MenubarController.shared.apply()
+        }
+    }
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+    }
+}
+
+struct Sparkline: View {
+    let samples: [Double]
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let maxV = max(100.0, samples.max() ?? 100.0)
+            Path { p in
+                guard samples.count > 1, w > 0, h > 0 else { return }
+                for (i, s) in samples.enumerated() {
+                    let x = w * CGFloat(i) / CGFloat(samples.count - 1)
+                    let y = h - min(h, h * CGFloat(s / maxV))
+                    if i == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+                }
+            }
+            .stroke(Color.white.opacity(0.4), lineWidth: 1.5)
+        }
+    }
+}
+
+struct ContentView: View {
+    private let minRowHeight: CGFloat = 40
+
+    @EnvironmentObject private var store: UsageStore
+    @State private var hoveredAppID: String? = nil
+    @State private var hoveredQuitID: String? = nil
+    @State private var hoveredOpenID: String? = nil
+    @State private var hoveredChevronID: String? = nil
+    @State private var query: String = ""
+    @State private var expandedID: String? = nil
+    @FocusState private var isSearchFocused: Bool
+
+    private var trimmedQuery: String {
+        query.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var displayedApps: [AppEntry] {
+        if trimmedQuery.isEmpty { return store.runningApps }
+        return store.installedApps.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmedQuery)
+                || $0.id.localizedCaseInsensitiveContains(trimmedQuery)
+        }
+    }
+
+    private var runningIDs: Set<String> {
+        Set(store.runningApps.map(\.id))
+    }
+
+    private func highlightedText(_ name: String, query q: String) -> AttributedString {
+        var attr = AttributedString(name)
+        attr.foregroundColor = .white.opacity(0.85)
+        guard !q.isEmpty else { return attr }
+        var index = name.startIndex
+        while index < name.endIndex {
+            guard let r = name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], range: index..<name.endIndex) else { break }
+            let lower = name.distance(from: name.startIndex, to: r.lowerBound)
+            let upper = name.distance(from: name.startIndex, to: r.upperBound)
+            if let ar = Range(NSRange(location: lower, length: upper - lower), in: attr) {
+                attr[ar].foregroundColor = .white
+            }
+            index = r.upperBound
+        }
+        return attr
     }
 
     private func rowTap(_ app: AppEntry) {
@@ -294,14 +628,6 @@ struct ContentView: View {
         hoveredQuitID = nil
         hoveredOpenID = nil
         hoveredChevronID = nil
-    }
-
-    private func openApp(_ app: AppEntry) {
-        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
-            running.activate(options: [.activateAllWindows])
-        } else if let url = app.url {
-            NSWorkspace.shared.open(url)
-        }
     }
 
     private func memString(_ memMB: Double) -> String {
@@ -327,9 +653,6 @@ struct ContentView: View {
         memMB >= 2048 ? Color.yellow.opacity(0.75) : Color.white.opacity(0.55)
     }
 
-    private func fmtK(_ v: Double) -> String {
-        v >= 1000 ? String(format: "%.1fk", v / 1000) : String(format: "%.0f", v)
-    }
     private func metric(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -341,18 +664,6 @@ struct ContentView: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .lineLimit(1)
         }
-    }
-
-    private func panelButton(_ title: String, red: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(red ? Color.red.opacity(0.9) : Color.white.opacity(0.8))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(red ? Color.red.opacity(0.15) : Color.white.opacity(0.1)))
-        }
-        .buttonStyle(.plain)
     }
 
     private func chevronButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
@@ -383,8 +694,8 @@ struct ContentView: View {
     }
 
     private func detailPanel(_ app: AppEntry) -> some View {
-        let u = app.pid.flatMap { usage[Int($0)] }
-        let hist = app.pid.flatMap { history[Int($0)] } ?? []
+        let u = app.pid.flatMap { store.usage[Int($0)] }
+        let hist = app.pid.flatMap { store.history[Int($0)] } ?? []
         let bundle = app.url.flatMap { Bundle(url: $0) }
         let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let bid = bundle?.bundleIdentifier ?? app.id
@@ -480,94 +791,9 @@ struct ContentView: View {
         .fixedSize()
     }
 
-    private func refreshUsage() {
-        let pids = runningApps.compactMap { $0.pid }
-        Self.usageQueue.async {
-            let now = ProcessInfo.processInfo.systemUptime
-            var snapshot: [Int: UsageSnapshot] = [:]
-            for pid in pids {
-                var info = ProcTaskInfo()
-                let sz = Int32(MemoryLayout<ProcTaskInfo>.size)
-                guard proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sz) == sz else { continue }
-                let total = info.pti_total_user &+ info.pti_total_system
-                var cpu = 0.0
-                if let prev = Self.cpuSamples[Int(pid)] {
-                    let dNanos = total >= prev.cpuNanos ? total - prev.cpuNanos : 0
-                    let dWall = now - prev.wall
-                    if dWall > 0 {
-                        cpu = Double(dNanos) / (dWall * 1_000_000_000.0) * 100.0
-                    }
-                }
-                Self.cpuSamples[Int(pid)] = (total, now)
-                var snap = UsageSnapshot()
-                snap.cpu = cpu
-                snap.info = info
-                var rusageBuf = [UInt8](repeating: 0, count: 512)
-                if proc_pid_rusage(pid, RUSAGE_INFO_V2, &rusageBuf) == 0 {
-                    func u64(_ off: Int) -> UInt64 { rusageBuf.withUnsafeBytes { $0.load(fromByteOffset: off, as: UInt64.self) } }
-                    let mb = 1024.0 * 1024.0
-                    snap.memMB = Double(u64(72)) / mb
-                    snap.diskReadMB = Double(u64(144)) / mb
-                    snap.diskWriteMB = Double(u64(152)) / mb
-                }
-                // Network: delta-sample nettop's cumulative counters into
-                // monotonic lifetime totals. Direct child helper processes
-                // (Chromium/Electron network services) count toward the app.
-                let ppidMap = Self.allProcessParents()
-                Self.netLock.lock()
-                let counters = Self.netCounters
-                var childIn: UInt64 = 0
-                var childOut: UInt64 = 0
-                for (child, parent) in ppidMap where parent == pid {
-                    if let k = counters[Int(child)] {
-                        childIn &+= k.curIn
-                        childOut &+= k.curOut
-                    }
-                }
-                let mine = counters[Int(pid)] ?? (0, 0)
-                let curIn = mine.curIn &+ childIn
-                let curOut = mine.curOut &+ childOut
-                var st = Self.netState[Int(pid)] ?? (curIn, curOut, 0, 0)
-                let dIn = curIn >= st.lastIn ? curIn &- st.lastIn : 0
-                let dOut = curOut >= st.lastOut ? curOut &- st.lastOut : 0
-                st = (curIn, curOut, st.totIn &+ dIn, st.totOut &+ dOut)
-                Self.netState[Int(pid)] = st
-                Self.netLock.unlock()
-                snap.netInMB = Double(st.totIn) / 1_048_576.0
-                snap.netOutMB = Double(st.totOut) / 1_048_576.0
-                snapshot[Int(pid)] = snap
-            }
-            DispatchQueue.main.async {
-                usage = snapshot
-                var newHist = history
-                for (pid, s) in snapshot {
-                    var h = newHist[pid] ?? []
-                    h.append(s.cpu)
-                    if h.count > 60 { h.removeFirst(h.count - 60) }
-                    newHist[pid] = h
-                }
-                newHist = newHist.filter { snapshot[$0.key] != nil }
-                history = newHist
-                // prune net state for dead pids
-                Self.netLock.lock()
-                Self.netState = Self.netState.filter { snapshot[$0.key] != nil }
-                Self.netCounters = Self.netCounters.filter { snapshot[$0.key] != nil }
-                Self.netLock.unlock()
-            }
-        }
-    }
-
-    private func quitApp(_ app: AppEntry) {
-        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
-            running.terminate()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { refreshRunningApps() }
-        refreshRunningApps()
-    }
-
     private func quitButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
         Button {
-            quitApp(app)
+            store.quitApp(app)
         } label: {
             Image(systemName: "xmark")
                 .font(.system(size: min(max(rowHeight * 0.2, 10), 12), weight: .medium))
@@ -592,7 +818,7 @@ struct ContentView: View {
 
     private func openButton(_ app: AppEntry, rowHeight: CGFloat) -> some View {
         Button {
-            openApp(app)
+            store.openApp(app)
             query = ""
         } label: {
             Image(systemName: "arrow.up.right")
@@ -639,6 +865,12 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .transition(.opacity)
                 }
+                SettingsLink {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(.white.opacity(0.4))
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .help("Settings")
             }
             .padding(.horizontal, 14)
             .frame(height: minRowHeight)
@@ -694,7 +926,7 @@ struct ContentView: View {
                                                 .frame(width: 6, height: 6)
                                         }
                                         Spacer()
-                                        if !searching, let pid = app.pid, let u = usage[Int(pid)] {
+                                        if !searching, let pid = app.pid, let u = store.usage[Int(pid)] {
                                             usageView(u, rowHeight: rowHeight)
                                         }
                                         if !searching {
@@ -723,9 +955,9 @@ struct ContentView: View {
                                     hoveredAppID = hovering ? app.id : nil
                                 }
                                 .contextMenu {
-                                    Button("Open \(app.name)") { openApp(app) }
+                                    Button("Open \(app.name)") { store.openApp(app) }
                                     if app.isRunning {
-                                        Button("Quit \(app.name)") { quitApp(app) }
+                                        Button("Quit \(app.name)") { store.quitApp(app) }
                                     }
                                 }
                                 .overlay(alignment: .bottom) {
@@ -748,23 +980,6 @@ struct ContentView: View {
             }
         }
         .background(Color.black)
-        .onAppear {
-            refreshRunningApps()
-            loadInstalledApps()
-            refreshUsage()
-            Self.startNettopMonitor()
-            Timer.publish(every: 1.0, on: .main, in: .common)
-                .autoconnect()
-                .sink { _ in refreshUsage() }
-                .store(in: &cancellables)
-            NSWorkspace.shared.notificationCenter
-                .publisher(for: NSWorkspace.didLaunchApplicationNotification)
-                .merge(with: NSWorkspace.shared.notificationCenter
-                    .publisher(for: NSWorkspace.didTerminateApplicationNotification))
-                .receive(on: DispatchQueue.main)
-                .sink { _ in refreshRunningApps() }
-                .store(in: &cancellables)
-        }
         .onReceive(
             NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)
                 .merge(with: NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification))
