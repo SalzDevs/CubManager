@@ -362,7 +362,7 @@ final class MenubarController: NSObject, NSMenuDelegate {
         if enabled {
             if statusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-                item.button?.image = NSImage(systemSymbolName: "chart.bar.fill",
+                item.button?.image = NSImage(systemSymbolName: "gauge.with.needle",
                                              accessibilityDescription: "CubManager")
                 menu.delegate = self
                 menu.autoenablesItems = false
@@ -871,6 +871,8 @@ struct ContentView: View {
                         .font(.system(size: 12, weight: .medium))
                 }
                 .help("Settings")
+                // Align with the native traffic-light buttons (center ≈ 14pt)
+                .offset(y: -6)
             }
             .padding(.horizontal, 14)
             .frame(height: minRowHeight)
