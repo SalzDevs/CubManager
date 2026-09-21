@@ -339,6 +339,7 @@ final class NotchController: NSObject {
     private var panel: NotchPanel?
     private var isExpanded = false
     private var collapseTimer: Timer?
+    private var dwellTimer: Timer?
     private var store: UsageStore { UsageStore.shared }
 
     private var hasNotch: Bool {
@@ -433,6 +434,7 @@ final class NotchController: NSObject {
     }
 
     func scheduleCollapse() {
+        cancelDwell()
         collapseTimer?.invalidate()
         collapseTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: false) { [weak self] _ in
             self?.collapse()
@@ -444,6 +446,51 @@ final class NotchController: NSObject {
         collapseTimer = nil
     }
 
+    /// Cursor must rest on the mark ~0.3s before expanding — fast sweeps
+    /// (e.g. toward the fullscreen menu bar) never trigger the grid.
+    func beginDwell() {
+        guard !isExpanded else { return }
+        dwellTimer?.invalidate()
+        dwellTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            self?.expand()
+        }
+    }
+
+    func cancelDwell() {
+        dwellTimer?.invalidate()
+        dwellTimer = nil
+    }
+
+    /// Any on-screen window that covers the main screen means some app is
+    /// fullscreen on the current space — hide the panel so it never floats
+    /// over video/games. Cheap CGWindowList check, piggybacks on a 0.5s tick.
+    static func fullscreenAppOnMainScreen() -> Bool {
+        guard let main = NSScreen.main else { return false }
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        for info in list {
+            guard (info["kCGWindowLayer"] as? Int) == 0 else { continue }
+            guard let owner = info["kCGWindowOwnerName"] as? String,
+                  !owner.contains("CubManager") else { continue }
+            guard let b = info["kCGWindowBounds"] as? [String: CGFloat] else { continue }
+            let w = b["Width"] ?? 0, h = b["Height"] ?? 0
+            if w >= main.frame.width - 4 && h >= main.frame.height - 4 { return true }
+        }
+        return false
+    }
+
+    func refresh() {
+        guard let panel else { return }
+        let hideInFullscreen = UserDefaults.standard.object(forKey: "hideInFullscreen") as? Bool ?? true
+        if hideInFullscreen && Self.fullscreenAppOnMainScreen() {
+            if panel.isVisible {
+                panel.orderOut(nil)
+                isExpanded = false
+            }
+        } else if !panel.isVisible {
+            showCollapsed()
+        }
+    }
+
     private func position() {
         guard let panel else { return }
         panel.setFrame(isExpanded ? expandedFrame() : collapsedFrame(), display: true)
@@ -451,11 +498,17 @@ final class NotchController: NSObject {
 
     override init() {
         super.init()
+        Timer.publish(every: 0.5, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.refresh() }
+            .store(in: &refreshCancellables)
         NotificationCenter.default.addObserver(
             self, selector: #selector(screenChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
     }
+
+    private var refreshCancellables = Set<AnyCancellable>()
 
     @objc private func screenChanged() { apply() }
 }
@@ -471,7 +524,7 @@ struct NotchCollapsedView: View {
                 .opacity(0.9)
         }
         .onHover { hovering in
-            if hovering { NotchController.shared.expand() }
+            if hovering { NotchController.shared.beginDwell() }
         }
         .help("CubManager")
     }
@@ -689,6 +742,7 @@ struct SettingsView: View {
     @AppStorage("menubarEnabled") private var menubarEnabled = true
     @AppStorage("dockIconVisible") private var dockIconVisible = true
     @AppStorage("notchEnabled") private var notchEnabled = false
+    @AppStorage("hideInFullscreen") private var hideInFullscreen = true
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("refreshInterval") private var refreshInterval = 1.0
 
@@ -704,6 +758,8 @@ struct SettingsView: View {
                     .disabled(!menubarEnabled)
                 Toggle("Show in notch", isOn: $notchEnabled)
                     .disabled(!hasNotch)
+                Toggle("Hide in fullscreen", isOn: $hideInFullscreen)
+                    .disabled(!notchEnabled || !hasNotch)
                 if !hasNotch {
                     Text("This Mac has no notch")
                         .font(.system(size: 10))
@@ -742,6 +798,9 @@ struct SettingsView: View {
         }
         .onChange(of: dockIconVisible) { _, _ in
             AppDelegate.applyDockIcon()
+        }
+        .onChange(of: hideInFullscreen) { _, _ in
+            NotchController.shared.refresh()
         }
         .onChange(of: notchEnabled) { _, _ in
             NotchController.shared.apply()
