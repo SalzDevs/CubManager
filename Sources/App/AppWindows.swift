@@ -36,6 +36,7 @@ final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
             window.title = "CubManager"
             let hosting = NSHostingView(rootView: ContentView(store: .shared))
             hosting.sizingOptions = .preferredContentSize   // window hugs the SwiftUI content
+            hosting.safeAreaRegions = []                    // no 32pt notch-inset dead band at the top
             window.contentView = hosting
             window.minSize = NSSize(width: 440, height: 260)
             window.isReleasedWhenClosed = false; window.delegate = self
