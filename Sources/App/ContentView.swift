@@ -1,6 +1,7 @@
 #if os(macOS) && !CUB_SELF_TEST
 import SwiftUI
 import AppKit
+import Foundation
 
 struct AppRow: View {
     @ObservedObject var store: UsageStore
@@ -41,18 +42,29 @@ struct AppRow: View {
 struct ContentView: View {
     @ObservedObject var store: UsageStore
     @State private var query = ""
-    @State private var showAllRunning = false
+    @State private var headerHeight: CGFloat = 0
+    @State private var listHeight: CGFloat = 0
     @FocusState private var focusedApp: AppInstanceID?
     private var search: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var maxVisible: Int { 3 }
-    private var visibleReports: [AppReport] {
-        let all = store.displayedReports
-        guard search.isEmpty, !showAllRunning else { return all }
-        return Array(all.prefix(maxVisible))
+    /// ≤3 apps: the window hugs the content (no scrolling). More than 3:
+    /// the list scrolls, capped so the window never exceeds the screen.
+    private var scrollable: Bool { store.reports.count > 3 }
+
+    /// Drive the window frame from the measured natural content heights.
+    /// (preferredContentSize only applies at creation here — AppKit windows
+    /// don't track it dynamically, so we do.)
+    private func adaptWindow() {
+        guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
+        let titleBar: CGFloat = 28
+        var height = headerHeight + listHeight + titleBar
+        if let screen = window.screen ?? NSScreen.main {
+            height = min(max(height, 300), screen.visibleFrame.height)
+        }
+        let frame = window.frame
+        window.setFrame(NSRect(x: frame.origin.x, y: frame.maxY - height,
+                               width: frame.width, height: height), display: true, animate: true)
     }
-    private var hiddenCount: Int { store.displayedReports.count - visibleReports.count }
-    private var overflowing: Bool { showAllRunning && store.displayedReports.count > maxVisible }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,6 +89,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 440, minHeight: 260, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: headerHeight) { _, _ in adaptWindow() }
+        .onChange(of: listHeight) { _, _ in adaptWindow() }
+        .onChange(of: store.reports.count) { _, _ in adaptWindow() }
         .tint(.teal)
     }
 
@@ -84,13 +99,21 @@ struct ContentView: View {
     /// the content via NSHostingView.sizingOptions. Scroll only when the
     /// user explicitly expands to all running apps.
     @ViewBuilder private var listArea: some View {
-        if overflowing {
+        if scrollable {
             ScrollView {
                 runningList.padding(16)
+                    .background(GeometryReader { geo in
+                        Color.clear.onAppear { listHeight = geo.size.height }
+                            .onChange(of: geo.size.height) { _, h in listHeight = h }
+                    })
             }
             .frame(maxHeight: 640)
         } else {
             runningList.padding(16)
+                .background(GeometryReader { geo in
+                    Color.clear.onAppear { listHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in listHeight = h }
+                })
         }
     }
 
@@ -120,18 +143,7 @@ struct ContentView: View {
                     .labelsHidden().frame(width: 160)
                 Spacer()
             }
-            appSection("Running apps", apps: visibleReports)
-            if hiddenCount > 0 {
-                Button("+\(hiddenCount) more running") {
-                    withAnimation(.easeInOut(duration: 0.2)) { showAllRunning = true }
-                }
-                .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
-            } else if showAllRunning {
-                Button("Show fewer") {
-                    withAnimation(.easeInOut(duration: 0.2)) { showAllRunning = false }
-                }
-                .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
-            }
+            appSection("Running apps", apps: store.displayedReports)
         }
     }
 
