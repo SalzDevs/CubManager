@@ -52,25 +52,13 @@ struct ContentView: View {
     /// the list scrolls, capped so the window never exceeds the screen.
     private var scrollable: Bool { store.reports.count > 3 }
 
-    private func debugWin(_ s: String) {
-        if let h = FileHandle(forWritingAtPath: "/tmp/win_debug.txt") {
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: Data("\(s)\n".utf8))
-            try? h.close()
-        }
-    }
-
     /// Drive the window frame from the measured natural content heights.
     /// (preferredContentSize only applies at creation here — AppKit windows
     /// don't track it dynamically, so we do.)
     private func adaptWindow() {
-        debugWin("adapt: header=\(headerHeight) list=\(listHeight) win=\(AppWindows.shared.mainWindowRef?.frame.height ?? -1)")
-
         guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
         let titleBar: CGFloat = 32
         let bottomAllowance: CGFloat = 2   // window ends exactly at the last row's bottom edge
-        // the list container has no bottom padding, so the window edge
-        // lands exactly on the last row's bottom.
         var height = headerHeight + listHeight + titleBar + bottomAllowance
         if let screen = window.screen ?? NSScreen.main {
             height = min(max(height, 300), screen.visibleFrame.height)
@@ -84,8 +72,16 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if let report = store.inspected {
                 InspectView(store: store, report: report).id(report.descriptor.id)
+            } else if !search.isEmpty {
+                // Search mode: only the search bar and the results.
+                searchHeader
+                Divider()
+                ScrollView {
+                    searchResults.padding(16)
+                }
+                .frame(maxHeight: 640)
             } else {
-                header
+                normalHeader
                     .background(GeometryReader { geo in
                         Color.clear
                             .onAppear { headerHeight = geo.size.height }
@@ -114,16 +110,45 @@ struct ContentView: View {
         .tint(.teal)
     }
 
-    /// No scrolling for the normal list (≤3 cards): the window itself hugs
-    /// the content via NSHostingView.sizingOptions. Scroll only when the
-    /// user explicitly expands to all running apps.
-    @ViewBuilder private var listArea: some View {
-        if !search.isEmpty {
-            ScrollView {
-                searchResults.padding(16)
+    private var searchField: some View {
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search running and installed apps", text: $query).textFieldStyle(.plain)
+                .onChange(of: query) { _, value in if !value.isEmpty { store.refreshInventoryIfNeeded() } }
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
-            .frame(maxHeight: 640)
-        } else if scrollable {
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+    }
+
+    /// Search mode: bar sits below the traffic-light row (lights span ~9-22pt).
+    private var searchHeader: some View {
+        searchField
+            .padding(.leading, 64)
+            .padding(.top, 34)
+            .padding(.leading, 16).padding(.trailing, 16).padding(.bottom, 12)
+    }
+
+    /// Normal mode: gear row (right, clear of the lights) + search bar below.
+    private var normalHeader: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Spacer(minLength: 64)   // clear the traffic-light buttons
+                Button { AppWindows.shared.showSettings() } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
+            }
+            searchField
+        }
+        .padding(16)
+    }
+
+    /// No scrolling for the normal list (≤3 cards): the window itself hugs
+    /// the content. Scroll only when there are more than 3 running apps.
+    @ViewBuilder private var listArea: some View {
+        if scrollable {
             ScrollView {
                 runningList.padding(16)
                     .background(GeometryReader { geo in
@@ -146,37 +171,6 @@ struct ContentView: View {
                         .onChange(of: geo.size.height) { _, h in listHeight = h }
                 })
         }
-    }
-
-    private var searchHeader: some View {
-        HStack {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search running and installed apps", text: $query).textFieldStyle(.plain)
-                .onChange(of: query) { _, value in if !value.isEmpty { store.refreshInventoryIfNeeded() } }
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.leading, 64)   // clear the traffic-light buttons horizontally
-        .padding(.top, 70)       // sit clearly BELOW the traffic-light buttons (they span ~9-22pt)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-        .padding(.leading, 16).padding(.trailing, 16).padding(.bottom, 16)
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search running and installed apps", text: $query).textFieldStyle(.plain)
-                    .onChange(of: query) { _, value in if !value.isEmpty { store.refreshInventoryIfNeeded() } }
-                if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).accessibilityLabel("Clear search")
-                }
-            }.padding(10).background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-        }.padding(16)
     }
 
     private var runningList: some View {
