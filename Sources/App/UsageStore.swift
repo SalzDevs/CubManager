@@ -4,7 +4,7 @@ import Combine
 import UserNotifications
 
 enum SortOrder: String, CaseIterable, Identifiable {
-    case recommended = "Recommended", cpu = "CPU usage", memory = "Memory usage", name = "Name"
+    case cpu = "CPU usage", memory = "Memory usage", name = "Name"
     var id: String { rawValue }
 }
 
@@ -20,10 +20,9 @@ final class UsageStore: ObservableObject {
     static let shared = UsageStore()
     @Published private(set) var reports: [AppInstanceID: AppReport] = [:]
     @Published private(set) var order: [AppInstanceID] = []
-    @Published private(set) var attentionSection = Set<AppInstanceID>()
     @Published private(set) var installed: [InstalledApp] = []
     @Published var selected: AppInstanceID?
-    @Published var sort: SortOrder = .recommended { didSet { reorder(force: true) } }
+    @Published var sort: SortOrder = .cpu { didSet { reorder(force: true) } }
     @Published var actionMessages: [AppInstanceID: String] = [:]
     @Published var pendingQuit = Set<AppInstanceID>()
     @Published var banner: String?
@@ -131,17 +130,9 @@ final class UsageStore: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastOrder >= 15 || order.isEmpty else { return }
         lastOrder = now
-        attentionSection = Set(reports.values.filter { !$0.analysis.signals.isEmpty }.map { $0.descriptor.id })
         order = reports.keys.sorted { lhs, rhs in
             guard let a = reports[lhs], let b = reports[rhs] else { return lhs.pid < rhs.pid }
             switch sort {
-            case .recommended:
-                let ap = a.analysis.primary?.kind.priority ?? 0, bp = b.analysis.primary?.kind.priority ?? 0
-                if ap != bp { return ap > bp }
-                if ap > 0 {
-                    let av = a.analysis.primary?.magnitude ?? 0, bv = b.analysis.primary?.magnitude ?? 0
-                    if av != bv { return av > bv }
-                }
             case .cpu:
                 if a.sample.cpu != b.sample.cpu { return (a.sample.cpu ?? -1) > (b.sample.cpu ?? -1) }
             case .memory:

@@ -106,10 +106,7 @@ struct ContentView: View {
                 Text("CPU").font(.caption).foregroundStyle(.secondary)
                 InfoButton(label: "How CPU percentages work", text: cpuExplanation)
             }
-            if store.sort == .recommended {
-                appSection("Needs attention", apps: store.displayedReports.filter { store.attentionSection.contains($0.descriptor.id) })
-                appSection("Other running apps", apps: store.displayedReports.filter { !store.attentionSection.contains($0.descriptor.id) })
-            } else { appSection("Running apps", apps: store.displayedReports) }
+            appSection("Running apps", apps: store.displayedReports)
         }
     }
 
