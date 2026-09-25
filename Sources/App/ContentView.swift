@@ -41,8 +41,18 @@ struct AppRow: View {
 struct ContentView: View {
     @ObservedObject var store: UsageStore
     @State private var query = ""
+    @State private var showAllRunning = false
     @FocusState private var focusedApp: AppInstanceID?
     private var search: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var maxVisible: Int { 3 }
+    private var visibleReports: [AppReport] {
+        let all = store.displayedReports
+        guard search.isEmpty, !showAllRunning else { return all }
+        return Array(all.prefix(maxVisible))
+    }
+    private var hiddenCount: Int { store.displayedReports.count - visibleReports.count }
+    private var overflowing: Bool { showAllRunning && store.displayedReports.count > maxVisible }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,14 +61,10 @@ struct ContentView: View {
             } else {
                 header
                 Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if search.isEmpty { runningList } else { searchResults }
-                    }.padding(16)
-                }
-                .onHover { store.pointerInList = $0 }
-                .onChange(of: focusedApp) { _, value in store.listHasFocus = value != nil }
-                .onDisappear { store.pointerInList = false; store.listHasFocus = false }
+                listArea
+                    .onHover { store.pointerInList = $0 }
+                    .onChange(of: focusedApp) { _, value in store.listHasFocus = value != nil }
+                    .onDisappear { store.pointerInList = false; store.listHasFocus = false }
             }
             if let banner = store.banner {
                 Divider()
@@ -69,9 +75,23 @@ struct ContentView: View {
                 }.padding(12).background(Color.orange.opacity(0.08))
             }
         }
-        .frame(minWidth: 440, minHeight: 560)
+        .frame(minWidth: 440, minHeight: 260)
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(.teal)
+    }
+
+    /// No scrolling for the normal list (≤3 cards): the window itself hugs
+    /// the content via NSHostingView.sizingOptions. Scroll only when the
+    /// user explicitly expands to all running apps.
+    @ViewBuilder private var listArea: some View {
+        if overflowing {
+            ScrollView {
+                runningList.padding(16)
+            }
+            .frame(maxHeight: 640)
+        } else {
+            runningList.padding(16)
+        }
     }
 
     private var header: some View {
@@ -106,7 +126,18 @@ struct ContentView: View {
                 Text("CPU").font(.caption).foregroundStyle(.secondary)
                 InfoButton(label: "How CPU percentages work", text: cpuExplanation)
             }
-            appSection("Running apps", apps: store.displayedReports)
+            appSection("Running apps", apps: visibleReports)
+            if hiddenCount > 0 {
+                Button("+\(hiddenCount) more running") {
+                    withAnimation(.easeInOut(duration: 0.2)) { showAllRunning = true }
+                }
+                .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+            } else if showAllRunning {
+                Button("Show fewer") {
+                    withAnimation(.easeInOut(duration: 0.2)) { showAllRunning = false }
+                }
+                .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

@@ -9,6 +9,7 @@ import Combine
 final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
     static let shared = AppWindows()
     private var mainWindow: NSWindow?
+    var mainWindowRef: NSWindow? { mainWindow }
     private var settingsWindow: NSWindow?
     private var item: NSStatusItem?
     private var subscription: AnyCancellable?
@@ -30,14 +31,15 @@ final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
 
     func showMain() {
         if mainWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 720),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 620),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "CubManager"
-            window.contentView = NSHostingView(rootView: ContentView(store: .shared))
-            window.minSize = NSSize(width: 440, height: 560)
+            let hosting = NSHostingView(rootView: ContentView(store: .shared))
+            hosting.sizingOptions = .preferredContentSize   // window hugs the SwiftUI content
+            window.contentView = hosting
+            window.minSize = NSSize(width: 440, height: 260)
             window.isReleasedWhenClosed = false; window.delegate = self
-            window.setFrameAutosaveName("CubManagerMain")
-            if !window.setFrameUsingName("CubManagerMain") { window.center() }
+            window.center()
             mainWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
