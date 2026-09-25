@@ -119,8 +119,6 @@ struct ContentView: View {
                 Picker("Sort", selection: $store.sort) { ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) } }
                     .labelsHidden().frame(width: 160)
                 Spacer()
-                Text("CPU").font(.caption).foregroundStyle(.secondary)
-                InfoButton(label: "How CPU percentages work", text: cpuExplanation)
             }
             appSection("Running apps", apps: visibleReports)
             if hiddenCount > 0 {
