@@ -30,7 +30,7 @@ echo "→ Building $BUNDLE"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
-swiftc -parse-as-library -O Sources/*.swift -o "$BUNDLE/Contents/MacOS/$APP_NAME"
+find Sources -name "*.swift" -print0 | xargs -0 swiftc -parse-as-library -O -o "$BUNDLE/Contents/MacOS/$APP_NAME"
 
 cp "$ICNS" "$BUNDLE/Contents/Resources/$ICNS"
 cp "Assets/MenuBarIcon.png" "$BUNDLE/Contents/Resources/MenuBarIcon.png"

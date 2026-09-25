@@ -1,0 +1,202 @@
+#if os(macOS) && !CUB_SELF_TEST
+import SwiftUI
+import AppKit
+
+// MARK: - Timestamped charts and inspection
+
+struct HistoryChart: View {
+    let samples: [ActivitySample]
+    let seconds: Double
+    let memory: Bool
+    let interval: Double
+    private var points: [ActivitySample] {
+        guard let last = samples.last else { return [] }
+        return samples.filter { $0.time >= last.time - seconds }
+    }
+    private func value(_ sample: ActivitySample) -> Double? { memory ? sample.memory : sample.cpu }
+    var body: some View {
+        let values = points.compactMap { value($0) }
+        let maximum = max(memory ? mib : 100, values.max() ?? 0) * 1.1
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(memory ? "Memory" : "CPU").font(.subheadline.weight(.medium))
+                Spacer()
+                Text(memory ? Format.bytes(values.max()) : Format.cpu(values.max())).font(.caption).foregroundStyle(.secondary)
+                Text("peak").font(.caption).foregroundStyle(.secondary)
+            }
+            Canvas { context, size in
+                guard let end = points.last?.time else { return }
+                var path = Path()
+                var previous: Double?
+                for point in points {
+                    guard let measurement = value(point) else { previous = nil; continue }
+                    let x = (point.time - (end - seconds)) / seconds * size.width
+                    let y = size.height - measurement / maximum * size.height
+                    let position = CGPoint(x: x, y: y)
+                    if let previous, point.time - previous <= interval * 2.5, point.elapsed > 0 { path.addLine(to: position) }
+                    else { path.move(to: position) }
+                    previous = point.time
+                }
+                context.stroke(path, with: .color(memory ? .blue : .teal), lineWidth: 2)
+            }
+            .frame(height: 90).padding(8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.035)))
+            .accessibilityLabel("\(memory ? "Memory" : "CPU") history. Peak \(memory ? Format.bytes(values.max()) : Format.cpu(values.max())). Gaps represent unavailable samples.")
+            HStack {
+                Text("−\(Int(seconds / 60)) min")
+                Spacer()
+                if let last = points.last { Text(last.date, style: .time) }
+            }.font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct InspectView: View {
+    @ObservedObject var store: UsageStore
+    let report: AppReport
+    @State private var seconds = 300.0
+    @State private var showTechnical = false
+    @State private var confirmForce = false
+    @State private var network: NetworkReading?
+    @State private var networkError: String?
+    @State private var measuringNetwork = false
+    private var id: AppInstanceID { report.descriptor.id }
+    private var closed: Bool { store.reports[id] == nil }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Button { store.selected = nil } label: { Label("All apps", systemImage: "chevron.left") }
+                    .buttonStyle(.borderless)
+                HStack(spacing: 12) {
+                    AppIcon(url: report.descriptor.url, size: 44)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(report.descriptor.name).font(.title2.bold())
+                        Text(closed ? "App closed · Last recorded activity" : (report.descriptor.background ? "In background" : "In foreground"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                if !closed { AppActions(store: store, id: id, showInspect: false) }
+                if let message = store.actionMessages[id] { Text(message).font(.callout).foregroundStyle(.secondary) }
+                observation
+                HStack(alignment: .top, spacing: 24) {
+                    Metric(title: "CPU", value: Format.cpu(report.sample.cpu))
+                    InfoButton(label: "How CPU percentages work", text: cpuExplanation)
+                    Metric(title: "Memory footprint", value: Format.bytes(report.sample.memory))
+                    Spacer(minLength: 0)
+                }
+                Picker("History", selection: $seconds) {
+                    Text("5 minutes").tag(300.0); Text("30 minutes").tag(1800.0)
+                }.pickerStyle(.segmented)
+                HistoryChart(samples: report.history, seconds: seconds, memory: false, interval: store.interval)
+                HistoryChart(samples: report.history, seconds: seconds, memory: true, interval: store.interval)
+                Text("History is local and in memory. Gaps are not zero usage. Memory trends reset when the helper group changes.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !report.incidents.isEmpty { incidentList }
+                DisclosureGroup("Technical details", isExpanded: $showTechnical) { technical.padding(.top, 12) }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Measurement coverage").font(.subheadline.weight(.medium))
+                    Text("Read \(report.processes.count) of \(report.expectedProcessCount) identifiable processes in the latest sample.")
+                    Text(coverageExplanation)
+                }.font(.caption).foregroundStyle(.secondary)
+            }.padding(20)
+        }
+        .confirmationDialog("Force quit \(report.descriptor.name)?", isPresented: $confirmForce, titleVisibility: .visible) {
+            Button("Force quit", role: .destructive) { store.quit(id, force: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Unsaved work may be lost. CubManager will not force quit automatically.") }
+    }
+
+    private var observation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What was observed").font(.headline)
+            if store.monitoringStale && !closed {
+                Text("Monitoring is interrupted. These are the last recorded values.")
+            } else if !report.sample.complete {
+                Text("Some process measurements are unavailable; no complete app total can be shown.")
+            } else if report.analysis.signals.isEmpty {
+                Text(report.analysis.cpuReady ? "No sustained background CPU signal in the evaluated window." : "Gathering two minutes of valid CPU history.")
+            }
+            ForEach(report.analysis.signals) { signal in
+                Label(signal.recovering ? "Activity settling. \(signal.explanation)" : signal.explanation, systemImage: "waveform.path")
+                    .foregroundStyle(.orange)
+            }
+            if let average = report.analysis.averageCPU { Text("2-minute CPU average: \(Format.cpu(average))") }
+            if let growth = report.analysis.memoryChange { Text("10-minute memory change: \(growth >= 0 ? "+" : "")\(Format.bytes(growth))") }
+            else { Text("Memory trend needs ten minutes of valid history with a stable helper group.") }
+            Text("Background work and memory growth may be expected. These measurements do not diagnose a fault or a memory leak.")
+                .font(.caption).foregroundStyle(.secondary)
+        }.font(.callout).padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.06)))
+    }
+
+    private var incidentList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Recent observations").font(.headline)
+            ForEach(report.incidents.reversed()) { incident in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(incident.explanation).font(.callout)
+                    HStack {
+                        Text(incident.began, style: .time)
+                        Text(incident.ended == nil && !closed ? "· Active" : "· Ended or evaluation interrupted")
+                    }.font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var technical: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            detail("Bundle ID", report.descriptor.bundleID.isEmpty ? "Unavailable" : report.descriptor.bundleID)
+            detail("PID", String(id.pid))
+            detail("Version", report.descriptor.url.flatMap { Bundle(url: $0)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String } ?? "Unavailable")
+            detail("Path", report.descriptor.url?.path ?? "Unavailable")
+            detail("Uptime at last sample", Format.duration(report.sample.date.timeIntervalSince(id.launched)))
+            detail("Threads in measured processes", String(report.processes.reduce(0) { $0 + $1.threads }))
+            detail("Disk read · current processes, since their starts", Format.bytes(report.diskRead))
+            detail("Disk written · current processes, since their starts", Format.bytes(report.diskWritten))
+            Text("Disk counters can decrease when helpers exit; they are not lifetime app totals.").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Button(measuringNetwork ? "Measuring network…" : "Measure network counters") { measureNetwork() }
+                .disabled(measuringNetwork || closed)
+            Text("On demand only. Reports counters for current sockets/processes returned by nettop—not a transfer rate or lifetime app total. No network history is collected.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let network {
+                detail("Received in available counters", Format.bytes(network.incoming))
+                detail("Sent in available counters", Format.bytes(network.outgoing))
+                Text(network.date, style: .time).font(.caption).foregroundStyle(.secondary)
+            }
+            if let networkError { Text(networkError).font(.caption).foregroundStyle(.secondary) }
+            Divider()
+            ForEach(report.processes, id: \.id) { process in
+                Text("PID \(process.id.pid) · \(Format.cpu(process.cpu)) CPU · \(Format.bytes(process.memory))")
+                    .font(.caption.monospaced()).textSelection(.enabled)
+            }
+            if !closed {
+                Divider()
+                Button("Force quit…", role: .destructive) { confirmForce = true }
+            }
+        }
+    }
+    private func detail(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).textSelection(.enabled)
+        }
+    }
+    private func measureNetwork() {
+        guard store.runningInstance(id) != nil else { networkError = "This app instance has closed."; return }
+        measuringNetwork = true; networkError = nil
+        let pids = Set(report.processes.map { $0.id.pid })
+        Task {
+            defer { measuringNetwork = false }
+            do {
+                let reading = try await NetworkProbe.measure(pids: pids)
+                guard store.runningInstance(id) != nil else { networkError = "The app closed during measurement."; return }
+                network = reading
+            } catch { networkError = error.localizedDescription }
+        }
+    }
+}
+#endif
