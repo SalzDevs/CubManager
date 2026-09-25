@@ -67,7 +67,7 @@ struct ContentView: View {
 
         guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
         let titleBar: CGFloat = 32
-        let bottomAllowance: CGFloat = 8   // last card's full bottom padding renders
+        let bottomAllowance: CGFloat = 40  // last card's full content — including its Inspect/Open buttons — renders
         var height = headerHeight + listHeight + titleBar + bottomAllowance
         if let screen = window.screen ?? NSScreen.main {
             height = min(max(height, 300), screen.visibleFrame.height)
