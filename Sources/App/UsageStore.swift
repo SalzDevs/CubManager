@@ -156,11 +156,9 @@ final class UsageStore: ObservableObject {
     var statusTitle: String {
         if sleeping { return "Monitoring paused for sleep" }
         if monitoringStale { return "Monitoring interrupted" }
-        if lastCollection == nil { return "Gathering activity…" }
         if !treeAvailable { return "Some activity is unavailable" }
         if reports.isEmpty { return "No supported running apps" }
         if attentionCount > 0 { return "\(attentionCount) \(attentionCount == 1 ? "app" : "apps") worth reviewing" }
-        if reports.values.contains(where: { !$0.analysis.cpuReady }) { return "Gathering recent activity…" }
         return "Nothing needs your attention"
     }
 
