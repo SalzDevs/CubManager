@@ -183,13 +183,15 @@ actor ActivityCollector {
                 visited.insert(pid)
                 if let metric = readProcess(pid, time: now, interval: interval) { metrics.append(metric) }
             }
-            let complete = parents != nil && metrics.count == group.count
-            // Values first: if some members of the group could not be read,
-            // report the total over the measurable ones and flag the gap —
-            // never present absence as zero, but never hide the value either.
-            let cpuKnown = !gap && elapsed > 0 && !metrics.isEmpty && metrics.allSatisfy { $0.cpu != nil }
+            // Activity-Monitor-style tolerance: sample whatever is alive and
+            // readable right now. A helper that died mid-scan just doesn't
+            // contribute; only an unreadable MAIN process marks the sample
+            // incomplete. Missing data is never zero, but values always show.
+            let mainRead = metrics.contains { $0.id.pid == app.id.pid }
+            let complete = parents != nil && mainRead
+            let cpuParts = metrics.compactMap { $0.cpu }
             let sample = ActivitySample(time: now, date: date, elapsed: gap ? 0 : elapsed,
-                cpu: cpuKnown ? metrics.reduce(0) { $0 + ($1.cpu ?? 0) } : nil,
+                cpu: (!gap && elapsed > 0 && !cpuParts.isEmpty) ? cpuParts.reduce(0, +) : nil,
                 memory: metrics.isEmpty ? nil : metrics.reduce(0) { $0 + $1.memory },
                 background: app.background && app.lastActivation < now - elapsed,
                 members: Set(metrics.map(\.id)), complete: complete)
