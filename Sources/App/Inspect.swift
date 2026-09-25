@@ -92,11 +92,6 @@ struct InspectView: View {
                 HistoryChart(samples: report.history, seconds: seconds, memory: true, interval: store.interval)
                     .font(.caption).foregroundStyle(.secondary)
                 if !report.incidents.isEmpty { incidentList }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Measurement coverage").font(.subheadline.weight(.medium))
-                    Text("Read \(report.processes.count) of \(report.expectedProcessCount) identifiable processes in the latest sample.")
-                    Text(coverageExplanation)
-                }.font(.caption).foregroundStyle(.secondary)
             }.padding(20)
         }
         .confirmationDialog("Force quit \(report.descriptor.name)?", isPresented: $confirmForce, titleVisibility: .visible) {

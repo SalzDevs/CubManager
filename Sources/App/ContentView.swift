@@ -109,7 +109,6 @@ struct ContentView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                InfoButton(label: "What is monitored?", text: coverageExplanation)
             }.padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color.teal.opacity(0.06)))
             HStack {
                 Picker("Sort", selection: $store.sort) { ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) } }

@@ -67,7 +67,6 @@ struct SettingsView: View {
             }
             Section("Privacy and coverage") {
                 Text("No account, telemetry or uploads. Activity history stays in memory and is discarded on exit. Alert preferences are stored locally.")
-                Text(coverageExplanation).font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).frame(width: 520, height: 650)
         .onChange(of: menubarEnabled) { _, value in

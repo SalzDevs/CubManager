@@ -2,7 +2,6 @@
 import SwiftUI
 import AppKit
 
-let coverageExplanation = "CubManager monitors regular running apps and identifiable descendants. Some background services, reparented helpers and Apple XPC services cannot be attributed. Summed process footprints are approximate. Missing data is never treated as zero. This does not detect every cause of a slow Mac."
 let cpuExplanation = "100% means approximately one logical CPU’s worth of processing time. Apps using multiple cores can exceed 100%. High usage may be expected while compiling, exporting or processing. This is not a battery-use percentage."
 
 struct AppIcon: View {
