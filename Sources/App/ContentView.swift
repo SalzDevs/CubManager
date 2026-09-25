@@ -51,13 +51,24 @@ struct ContentView: View {
     /// the list scrolls, capped so the window never exceeds the screen.
     private var scrollable: Bool { store.reports.count > 3 }
 
+    private func debugWin(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: "/tmp/win_debug.txt") {
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: Data("\(s)\n".utf8))
+            try? h.close()
+        }
+    }
+
     /// Drive the window frame from the measured natural content heights.
     /// (preferredContentSize only applies at creation here — AppKit windows
     /// don't track it dynamically, so we do.)
     private func adaptWindow() {
+        debugWin("adapt: header=\(headerHeight) list=\(listHeight) win=\(AppWindows.shared.mainWindowRef?.frame.height ?? -1)")
+
         guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
-        let titleBar: CGFloat = 28
-        var height = headerHeight + listHeight + titleBar
+        let titleBar: CGFloat = 32
+        let bottomAllowance: CGFloat = 8   // last card's full bottom padding renders
+        var height = headerHeight + listHeight + titleBar + bottomAllowance
         if let screen = window.screen ?? NSScreen.main {
             height = min(max(height, 300), screen.visibleFrame.height)
         }
