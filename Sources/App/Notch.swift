@@ -83,7 +83,9 @@ struct NotchSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if expanded {
-                Text(store.statusTitle).font(.headline).foregroundStyle(.white)
+                if !store.statusTitle.isEmpty {
+                    Text(store.statusTitle).font(.headline).foregroundStyle(.white)
+                }
                 Text(store.attentionCount > 0 ? "Review sustained activity and choose what to do." : "A quiet overview of monitored apps. Open CubManager for details and history.")
                     .font(.caption).foregroundStyle(.white.opacity(0.7))
                 Button("Open CubManager") { AppWindows.shared.showMain() }.buttonStyle(.borderedProminent).tint(.teal)

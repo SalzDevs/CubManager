@@ -159,16 +159,7 @@ final class UsageStore: ObservableObject {
         if !treeAvailable { return "Some activity is unavailable" }
         if reports.isEmpty { return "No supported running apps" }
         if attentionCount > 0 { return "\(attentionCount) \(attentionCount == 1 ? "app" : "apps") worth reviewing" }
-        return "Nothing needs your attention"
-    }
-
-    var statusDetail: String {
-        if sleeping || monitoringStale { return "Recent values may be stale. Analysis restarts when fresh samples arrive." }
-        if !treeAvailable { return "The process list could not be read. Missing measurements are not zero." }
-        if reports.isEmpty { return "Monitoring covers supported running apps, not every macOS process." }
-        if attentionCount > 0 { return "Sustained activity is worth reviewing, but may be expected work." }
-        let memoryReady = reports.values.filter { $0.analysis.memoryReady }.count
-        return "No active CPU or memory-growth signals. Memory trends ready for \(memoryReady) of \(reports.count) apps; other baselines need history or stable helper groups."
+        return ""
     }
 
     func inspect(_ id: AppInstanceID) {

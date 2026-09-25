@@ -78,8 +78,10 @@ final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let store = UsageStore.shared
-        let title = NSMenuItem(title: store.statusTitle, action: nil, keyEquivalent: "")
-        title.isEnabled = false; menu.addItem(title)
+        if !store.statusTitle.isEmpty {
+            let title = NSMenuItem(title: store.statusTitle, action: nil, keyEquivalent: "")
+            title.isEnabled = false; menu.addItem(title)
+        }
         let top = store.reports.values.sorted {
             let a = $0.analysis.primary?.kind.priority ?? 0, b = $1.analysis.primary?.kind.priority ?? 0
             return a == b ? ($0.sample.cpu ?? -1) > ($1.sample.cpu ?? -1) : a > b

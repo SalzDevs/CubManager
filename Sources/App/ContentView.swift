@@ -99,17 +99,6 @@ struct ContentView: View {
 
     private var runningList: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: store.attentionCount > 0 ? "waveform.path" : "circle.dotted")
-                    .foregroundStyle(store.attentionCount > 0 ? Color.orange : Color.secondary)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(store.statusTitle).font(.headline)
-                    Text(store.statusDetail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Text("Monitoring \(store.reports.count) apps · Local history up to 30 min")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }.padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color.teal.opacity(0.06)))
             HStack {
                 Picker("Sort", selection: $store.sort) { ForEach(SortOrder.allCases) { Text($0.rawValue).tag($0) } }
                     .labelsHidden().frame(width: 160)
