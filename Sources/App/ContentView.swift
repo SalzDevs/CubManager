@@ -101,6 +101,7 @@ struct ContentView: View {
                     Text("CubManager").font(.title2.bold())
                     Text("Understand your apps. Stay in control.").font(.caption).foregroundStyle(.secondary)
                 }
+                .padding(.leading, 64)   // clear the traffic-light buttons
                 Spacer()
                 Button { AppWindows.shared.showSettings() } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
