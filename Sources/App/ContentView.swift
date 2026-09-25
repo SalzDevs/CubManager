@@ -60,6 +60,8 @@ struct ContentView: View {
                 InspectView(store: store, report: report).id(report.descriptor.id)
             } else {
                 header
+                    .overlay(alignment: .topTrailing) { Color.red.frame(width: 10, height: 10).offset(x: -20, y: 2) }
+                    .background(Color.blue.opacity(0.35))
                 Divider()
                 listArea
                     .onHover { store.pointerInList = $0 }

@@ -34,9 +34,12 @@ final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 620),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "CubManager"
+            window.styleMask.insert(.fullSizeContentView)   // content under the title bar — no dead band
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
             let hosting = NSHostingView(rootView: ContentView(store: .shared))
             hosting.sizingOptions = .preferredContentSize   // window hugs the SwiftUI content
-            hosting.safeAreaRegions = []                    // no 32pt notch-inset dead band at the top
+            hosting.safeAreaRegions = []                    // no notch-inset dead band at the top
             window.contentView = hosting
             window.minSize = NSSize(width: 440, height: 260)
             window.isReleasedWhenClosed = false; window.delegate = self
@@ -51,6 +54,9 @@ final class AppWindows: NSObject, NSWindowDelegate, NSMenuDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 650),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "CubManager Settings"
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
             window.contentView = NSHostingView(rootView: SettingsView(store: .shared))
             window.isReleasedWhenClosed = false; window.delegate = self; window.center()
             settingsWindow = window
