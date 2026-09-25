@@ -97,10 +97,7 @@ struct ContentView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("CubManager")
-                    .font(.title3.bold())
-                    .padding(.leading, 64)   // clear the traffic-light buttons
-                Spacer()
+                Spacer(minLength: 64)   // clear the traffic-light buttons
                 Button { AppWindows.shared.showSettings() } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
             }
