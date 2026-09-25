@@ -148,13 +148,24 @@ struct ContentView: View {
         }
     }
 
+    private var searchHeader: some View {
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search running and installed apps", text: $query).textFieldStyle(.plain)
+                .onChange(of: query) { _, value in if !value.isEmpty { store.refreshInventoryIfNeeded() } }
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.leading, 64)   // clear the traffic-light buttons
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .padding(16)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Spacer(minLength: 64)   // clear the traffic-light buttons
-                Button { AppWindows.shared.showSettings() } label: { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
-            }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search running and installed apps", text: $query).textFieldStyle(.plain)
