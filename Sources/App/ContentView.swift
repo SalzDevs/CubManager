@@ -159,7 +159,7 @@ struct ContentView: View {
             }
         }
         .padding(.leading, 64)   // clear the traffic-light buttons horizontally
-        .padding(.top, 44)       // sit clearly BELOW the traffic-light buttons (they span ~9-22pt)
+        .padding(.top, 70)       // sit clearly BELOW the traffic-light buttons (they span ~9-22pt)
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         .padding(.leading, 16).padding(.trailing, 16).padding(.bottom, 16)
