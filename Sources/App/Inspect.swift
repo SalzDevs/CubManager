@@ -78,7 +78,6 @@ struct InspectView: View {
                 }
                 if !closed { AppActions(store: store, id: id, showInspect: false) }
                 if let message = store.actionMessages[id] { Text(message).font(.callout).foregroundStyle(.secondary) }
-                observation
                 HStack(alignment: .top, spacing: 24) {
                     Metric(title: "CPU", value: Format.cpu(report.sample.cpu))
                     InfoButton(label: "How CPU percentages work", text: cpuExplanation)
@@ -98,29 +97,6 @@ struct InspectView: View {
             Button("Force quit", role: .destructive) { store.quit(id, force: true) }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Unsaved work may be lost. CubManager will not force quit automatically.") }
-    }
-
-    private var observation: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("What was observed").font(.headline)
-            if store.monitoringStale && !closed {
-                Text("Monitoring is interrupted. These are the last recorded values.")
-            } else if !report.sample.complete {
-                Text("Some of this app's processes could not be measured; values cover the measurable ones.")
-            } else if report.analysis.signals.isEmpty {
-                Text(report.analysis.cpuReady ? "No sustained background CPU signal in the evaluated window." : "Gathering two minutes of valid CPU history.")
-            }
-            ForEach(report.analysis.signals) { signal in
-                Label(signal.recovering ? "Activity settling. \(signal.explanation)" : signal.explanation, systemImage: "waveform.path")
-                    .foregroundStyle(.orange)
-            }
-            if let average = report.analysis.averageCPU { Text("2-minute CPU average: \(Format.cpu(average))") }
-            if let growth = report.analysis.memoryChange { Text("10-minute memory change: \(growth >= 0 ? "+" : "")\(Format.bytes(growth))") }
-            else { Text("Memory trend needs ten minutes of valid history with a stable helper group.") }
-            Text("Background work and memory growth may be expected. These measurements do not diagnose a fault or a memory leak.")
-                .font(.caption).foregroundStyle(.secondary)
-        }.font(.callout).padding(14).frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.teal.opacity(0.06)))
     }
 
     private var incidentList: some View {
