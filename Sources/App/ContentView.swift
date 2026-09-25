@@ -35,6 +35,7 @@ struct AppRow: View {
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.06)))
+        .frame(maxWidth: .infinity)   // card spans the full window width
         .accessibilityElement(children: .contain)
     }
 }
@@ -67,7 +68,9 @@ struct ContentView: View {
 
         guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
         let titleBar: CGFloat = 32
-        let bottomAllowance: CGFloat = 0   // window ends exactly at the last row's bottom edge
+        let bottomAllowance: CGFloat = 2   // window ends exactly at the last row's bottom edge
+        // the list container has no bottom padding, so the window edge
+        // lands exactly on the last row's bottom.
         var height = headerHeight + listHeight + titleBar + bottomAllowance
         if let screen = window.screen ?? NSScreen.main {
             height = min(max(height, 300), screen.visibleFrame.height)
@@ -115,7 +118,12 @@ struct ContentView: View {
     /// the content via NSHostingView.sizingOptions. Scroll only when the
     /// user explicitly expands to all running apps.
     @ViewBuilder private var listArea: some View {
-        if scrollable {
+        if !search.isEmpty {
+            ScrollView {
+                searchResults.padding(16)
+            }
+            .frame(maxHeight: 640)
+        } else if scrollable {
             ScrollView {
                 runningList.padding(16)
                     .background(GeometryReader { geo in
@@ -126,7 +134,9 @@ struct ContentView: View {
             .frame(maxHeight: 640)
         } else {
             runningList
-                .padding(16)
+                .padding(.top, 16)
+                .padding(.leading, 16)
+                .padding(.trailing, 16)
                 // natural height regardless of the window's current proposal —
                 // otherwise a too-small window shrinks the measurement and the
                 // last card gets clipped
@@ -194,7 +204,9 @@ struct ContentView: View {
                         Text(app.name).lineLimit(1)
                         Spacer()
                         Button("Launch") { store.launch(app) }
-                    }.padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(12).background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
                 }
             }
             if store.scanning { ProgressView("Finding installed apps…").controlSize(.small) }
