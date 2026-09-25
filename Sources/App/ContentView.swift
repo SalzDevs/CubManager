@@ -158,10 +158,11 @@ struct ContentView: View {
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
-        .padding(.leading, 64)   // clear the traffic-light buttons
+        .padding(.leading, 64)   // clear the traffic-light buttons horizontally
+        .padding(.top, 28)       // sit BELOW the traffic-light buttons
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
-        .padding(16)
+        .padding(.leading, 16).padding(.trailing, 16).padding(.bottom, 16)
     }
 
     private var header: some View {
