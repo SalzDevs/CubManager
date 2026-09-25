@@ -17,23 +17,55 @@ struct HistoryChart: View {
 
     private var lineColor: Color { memory ? .blue : .teal }
 
+    /// Nice, data-driven gridline steps (1/2/2.5/5 × 10ⁿ) — the axis follows
+    /// the data instead of being hard-coded.
+    private func niceGridlines(maximum: Double) -> [Double] {
+        var rawStep = maximum / 3
+        let magnitude = pow(10.0, floor(log10(rawStep)))
+        let step = [1, 2, 2.5, 5, 10].map { $0 * magnitude }
+            .first { maximum / $0 <= 3.5 } ?? rawStep
+        var values: [Double] = []
+        var v = 0.0
+        while v <= maximum + 0.001 { values.append(v); v += step }
+        return values.count >= 2 ? values : [0, maximum]
+    }
+
+    private func gridLabel(_ gridValue: Double) -> String {
+        memory ? Format.bytes(gridValue) : String(format: "%.0f%%", gridValue)
+    }
+
+    private func timeAgoLabel(_ secondsAgo: Double) -> String {
+        let s = Int(secondsAgo.rounded())
+        if s >= 3600 {
+            let h = s / 3600, m = (s % 3600) / 60
+            return m != 0 ? "−\(h)h \(m)m" : "−\(h)h"
+        }
+        if s >= 60 {
+            let m = s / 60, r = s % 60
+            return r != 0 ? "−\(m)m \(r)s" : "−\(m)m"
+        }
+        return "−\(s)s"
+    }
+
     var body: some View {
         let values = points.compactMap { value($0) }
         let current = values.last
         let peak = values.max() ?? 0
         // Scale: CPU keeps 100% (one core) visible; memory scales to the peak.
         let maximum = max(memory ? mib : 100, peak) * 1.08
-        let gridValues: [Double] = memory
-            ? [0, maximum / 2, maximum]                      // labeled in the canvas
-            : [0, 50, 100, maximum]                          // 100% = one core
+        let gridValues = niceGridlines(maximum: maximum)
         let currentValueText = memory ? Format.bytes(current) : Format.cpu(current)
         let peakText = memory ? Format.bytes(peak) : Format.cpu(peak)
+        let xLabels: [(Double, String)] = [
+            (0, timeAgoLabel(seconds)),
+            (0.5, timeAgoLabel(seconds / 2)),
+            (1, "now"),
+        ]
 
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text(memory ? "Memory" : "CPU").font(.subheadline.weight(.medium))
                 Spacer()
-                // Current value is the answer users look for — big and live.
                 Text(currentValueText)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .monospacedDigit()
@@ -42,98 +74,88 @@ struct HistoryChart: View {
                 Text(peakText).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 Text("peak").font(.caption2).foregroundStyle(.secondary)
             }
-            HStack(alignment: .top, spacing: 6) {
-                // Y-axis labels, right-aligned to the gridlines.
-                VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(gridValues.reversed(), id: \.self) { gridValue in
-                        Text(axisLabel(gridValue, maximum: maximum, top: gridValue == gridValues.last))
-                            .font(.system(size: 8))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .frame(height: 90 / max(1, CGFloat(gridValues.count - 1)), alignment: .top)
-                            .offset(y: gridValue == gridValues.last ? 8 : 0)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .fixedSize()
-                Canvas { context, size in
-                    guard let end = points.last?.time else { return }
-                    // gridlines
-                    for gridValue in gridValues.dropLast() {
-                        let y = size.height - gridValue / maximum * size.height
-                        var line = Path()
-                        line.move(to: CGPoint(x: 0, y: y))
-                        line.addLine(to: CGPoint(x: size.width, y: y))
-                        context.stroke(line, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
-                    }
-                    // CPU: dashed reference line at exactly one core
-                    if !memory, maximum > 100 {
-                        let y = size.height - 100 / maximum * size.height
-                        var ref = Path()
-                        ref.move(to: CGPoint(x: 0, y: y))
-                        ref.addLine(to: CGPoint(x: size.width, y: y))
-                        var dashed = StrokeStyle(lineWidth: 0.5, dash: [3, 3])
-                        dashed.dashPhase = 0
-                        context.stroke(ref, with: .color(.primary.opacity(0.18)), style: dashed)
-                    }
-                    var previous: Double?
-                    var area = Path()
+            Canvas { context, size in
+                guard let end = points.last?.time else { return }
+                // y gridlines + inline labels
+                for gridValue in gridValues {
+                    let y = size.height - gridValue / maximum * size.height
                     var line = Path()
-                    var started = false
-                    var lastPosition: CGPoint?
-                    for point in points {
-                        guard let measurement = value(point) else { previous = nil; started = false; continue }
-                        let x = (point.time - (end - seconds)) / seconds * size.width
-                        let y = size.height - measurement / maximum * size.height
-                        let position = CGPoint(x: x, y: y)
-                        if let previous, point.time - previous <= interval * 2.5, point.elapsed > 0, started {
-                            line.addLine(to: position)
-                            area.addLine(to: position)
-                        } else {
-                            line.move(to: position)
-                            area.move(to: CGPoint(x: x, y: size.height))
-                            area.addLine(to: position)
-                            started = true
-                        }
-                        previous = point.time
-                        lastPosition = position
-                    }
-                    // close the filled area down to the baseline
-                    if let lastPosition, started {
-                        area.addLine(to: CGPoint(x: lastPosition.x, y: size.height))
-                        area.closeSubpath()
-                        context.fill(area, with: .linearGradient(
-                            Gradient(colors: [lineColor.opacity(0.35), lineColor.opacity(0.02)]),
-                            startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: size.height)))
-                    }
-                    context.stroke(line, with: .color(lineColor), lineWidth: 1.5)
-                    // live dot on the newest sample
-                    if let lastPosition, started {
-                        context.fill(Path(ellipseIn: CGRect(x: lastPosition.x - 3, y: lastPosition.y - 3, width: 6, height: 6)),
-                                     with: .color(lineColor))
-                    }
+                    line.move(to: CGPoint(x: 0, y: y))
+                    line.addLine(to: CGPoint(x: size.width, y: y))
+                    context.stroke(line, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
+                    context.draw(Text(gridLabel(gridValue))
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary),
+                        at: CGPoint(x: 4, y: y - 7), anchor: .topLeading)
                 }
-                .frame(height: 90)
+                // CPU: dashed reference line at exactly one core
+                if !memory, maximum > 100 {
+                    let y = size.height - 100 / maximum * size.height
+                    var ref = Path()
+                    ref.move(to: CGPoint(x: 0, y: y))
+                    ref.addLine(to: CGPoint(x: size.width, y: y))
+                    context.stroke(ref, with: .color(.primary.opacity(0.18)),
+                                   style: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                }
+                // x gridlines (vertical)
+                for fraction in [0.0, 0.5, 1.0] {
+                    let x = fraction * size.width
+                    var line = Path()
+                    line.move(to: CGPoint(x: x, y: 0))
+                    line.addLine(to: CGPoint(x: x, y: size.height))
+                    context.stroke(line, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
+                }
+                var previous: Double?
+                var area = Path()
+                var line = Path()
+                var started = false
+                var lastPosition: CGPoint?
+                for point in points {
+                    guard let measurement = value(point) else { previous = nil; started = false; continue }
+                    let x = (point.time - (end - seconds)) / seconds * size.width
+                    let y = size.height - measurement / maximum * size.height
+                    let position = CGPoint(x: x, y: y)
+                    if let previous, point.time - previous <= interval * 2.5, point.elapsed > 0, started {
+                        line.addLine(to: position)
+                        area.addLine(to: position)
+                    } else {
+                        line.move(to: position)
+                        area.move(to: CGPoint(x: x, y: size.height))
+                        area.addLine(to: position)
+                        started = true
+                    }
+                    previous = point.time
+                    lastPosition = position
+                }
+                if let lastPosition, started {
+                    area.addLine(to: CGPoint(x: lastPosition.x, y: size.height))
+                    area.closeSubpath()
+                    context.fill(area, with: .linearGradient(
+                        Gradient(colors: [lineColor.opacity(0.35), lineColor.opacity(0.02)]),
+                        startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: 0, y: size.height)))
+                    context.stroke(line, with: .color(lineColor), lineWidth: 1.5)
+                    context.fill(Path(ellipseIn: CGRect(x: lastPosition.x - 3, y: lastPosition.y - 3, width: 6, height: 6)),
+                                 with: .color(lineColor))
+                }
             }
-            .padding(8)
+            .frame(height: 90)
+            // x-axis labels under the chart, aligned to the vertical gridlines
+            .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1) }
+            .overlay(alignment: .bottom) { xLabel(xLabels[1].1) }
+            .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1) }
+            .padding(8).padding(.bottom, 16)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.035)))
             .accessibilityLabel("\(memory ? "Memory" : "CPU") history. Current \(currentValueText). Peak \(peakText). Gaps represent unavailable samples.")
-            HStack {
-                Text("−\(Int(seconds / 60)) min")
-                Spacer()
-                if let last = points.last { Text(last.date, style: .time) }
-            }.font(.caption2).foregroundStyle(.secondary)
         }
     }
 
-    private func axisLabel(_ gridValue: Double, maximum: Double, top: Bool) -> String {
-        if memory {
-            // top label = the scale max; others in plain MiB
-            if top { return "" }
-            return String(format: "%.0f MiB", gridValue / mib)
-        }
-        if top && maximum > 100 { return "" }   // the stretched max isn't labeled on CPU
-        return String(format: "%.0f%%", gridValue)
+    private func xLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 8))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .fixedSize()
+            .offset(y: 8)
     }
 }
 
