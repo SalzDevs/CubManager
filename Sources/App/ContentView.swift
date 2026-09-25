@@ -67,7 +67,7 @@ struct ContentView: View {
 
         guard let window = AppWindows.shared.mainWindowRef, store.inspected == nil, search.isEmpty else { return }
         let titleBar: CGFloat = 32
-        let bottomAllowance: CGFloat = 40  // last card's full content — including its Inspect/Open buttons — renders
+        let bottomAllowance: CGFloat = 0   // window ends exactly at the last row's bottom edge
         var height = headerHeight + listHeight + titleBar + bottomAllowance
         if let screen = window.screen ?? NSScreen.main {
             height = min(max(height, 300), screen.visibleFrame.height)
@@ -83,6 +83,11 @@ struct ContentView: View {
                 InspectView(store: store, report: report).id(report.descriptor.id)
             } else {
                 header
+                    .background(GeometryReader { geo in
+                        Color.clear
+                            .onAppear { headerHeight = geo.size.height }
+                            .onChange(of: geo.size.height) { _, h in headerHeight = h }
+                    })
                 Divider()
                 listArea
                     .onHover { store.pointerInList = $0 }
@@ -120,7 +125,12 @@ struct ContentView: View {
             }
             .frame(maxHeight: 640)
         } else {
-            runningList.padding(16)
+            runningList
+                .padding(16)
+                // natural height regardless of the window's current proposal —
+                // otherwise a too-small window shrinks the measurement and the
+                // last card gets clipped
+                .fixedSize(horizontal: false, vertical: true)
                 .background(GeometryReader { geo in
                     Color.clear.onAppear { listHeight = geo.size.height }
                         .onChange(of: geo.size.height) { _, h in listHeight = h }
