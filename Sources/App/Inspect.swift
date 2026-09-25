@@ -114,7 +114,7 @@ struct InspectView: View {
             if store.monitoringStale && !closed {
                 Text("Monitoring is interrupted. These are the last recorded values.")
             } else if !report.sample.complete {
-                Text("Some process measurements are unavailable; no complete app total can be shown.")
+                Text("Some of this app's processes could not be measured; values cover the measurable ones.")
             } else if report.analysis.signals.isEmpty {
                 Text(report.analysis.cpuReady ? "No sustained background CPU signal in the evaluated window." : "Gathering two minutes of valid CPU history.")
             }

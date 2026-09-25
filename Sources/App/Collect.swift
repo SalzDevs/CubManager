@@ -184,10 +184,13 @@ actor ActivityCollector {
                 if let metric = readProcess(pid, time: now, interval: interval) { metrics.append(metric) }
             }
             let complete = parents != nil && metrics.count == group.count
-            let cpuKnown = complete && !gap && elapsed > 0 && metrics.allSatisfy { $0.cpu != nil }
+            // Values first: if some members of the group could not be read,
+            // report the total over the measurable ones and flag the gap —
+            // never present absence as zero, but never hide the value either.
+            let cpuKnown = !gap && elapsed > 0 && !metrics.isEmpty && metrics.allSatisfy { $0.cpu != nil }
             let sample = ActivitySample(time: now, date: date, elapsed: gap ? 0 : elapsed,
                 cpu: cpuKnown ? metrics.reduce(0) { $0 + ($1.cpu ?? 0) } : nil,
-                memory: complete ? metrics.reduce(0) { $0 + $1.memory } : nil,
+                memory: metrics.isEmpty ? nil : metrics.reduce(0) { $0 + $1.memory },
                 background: app.background && app.lastActivation < now - elapsed,
                 members: Set(metrics.map(\.id)), complete: complete)
             var history = histories[app.id] ?? RingBuffer(capacity: 1801)

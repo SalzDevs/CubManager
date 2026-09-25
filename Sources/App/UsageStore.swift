@@ -160,7 +160,6 @@ final class UsageStore: ObservableObject {
         if !treeAvailable { return "Some activity is unavailable" }
         if reports.isEmpty { return "No supported running apps" }
         if attentionCount > 0 { return "\(attentionCount) \(attentionCount == 1 ? "app" : "apps") worth reviewing" }
-        if reports.values.contains(where: { !$0.sample.complete || $0.sample.cpu == nil }) { return "Some activity is unavailable" }
         if reports.values.contains(where: { !$0.analysis.cpuReady }) { return "Gathering recent activity…" }
         return "Nothing needs your attention"
     }
