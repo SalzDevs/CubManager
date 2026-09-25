@@ -75,8 +75,7 @@ struct ContentView: View {
                 }.padding(12).background(Color.orange.opacity(0.08))
             }
         }
-        .frame(minWidth: 440, minHeight: 260)
-        .ignoresSafeArea(edges: .top)
+        .frame(minWidth: 440, minHeight: 260, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(.teal)
     }
