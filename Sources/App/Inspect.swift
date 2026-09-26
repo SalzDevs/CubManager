@@ -124,7 +124,7 @@ struct HistoryChart: View {
                 var lastPosition: CGPoint?
                 for point in points {
                     guard let measurement = value(point) else { previous = nil; started = false; continue }
-                    let x = (point.time - (end - seconds)) / seconds * size.width
+                    let x = (end - point.time) / seconds * size.width
                     let y = size.height - measurement / maximum * size.height
                     let position = CGPoint(x: x, y: y)
                     if let previous, point.time - previous <= interval * 2.5, point.elapsed > 0, started {
