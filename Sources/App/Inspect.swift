@@ -34,6 +34,8 @@ struct HistoryChart: View {
         memory ? Format.bytes(gridValue) : String(format: "%.0f%%", gridValue)
     }
 
+    private var axisWidth: CGFloat { memory ? 44 : 30 }
+
     private func timeAgoLabel(_ secondsAgo: Double) -> String {
         let s = Int(secondsAgo.rounded())
         if s >= 3600 {
@@ -74,20 +76,30 @@ struct HistoryChart: View {
                 Text(peakText).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 Text("peak").font(.caption2).foregroundStyle(.secondary)
             }
-            Canvas { context, size in
-                guard let end = points.last?.time else { return }
-                // y gridlines + inline labels
-                for gridValue in gridValues {
-                    let y = size.height - gridValue / maximum * size.height
-                    var line = Path()
-                    line.move(to: CGPoint(x: 0, y: y))
-                    line.addLine(to: CGPoint(x: size.width, y: y))
-                    context.stroke(line, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
-                    context.draw(Text(gridLabel(gridValue))
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary),
-                        at: CGPoint(x: 4, y: y - 7), anchor: .topLeading)
+            HStack(alignment: .top, spacing: 5) {
+                // Y-axis labels live OUTSIDE the plot — they can never
+                // overlap the data line.
+                ZStack(alignment: .topLeading) {
+                    ForEach(gridValues, id: \.self) { gridValue in
+                        Text(gridLabel(gridValue))
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .fixedSize()
+                            .offset(y: max(0, min(76, (1 - gridValue / maximum) * 90 - 5)))
+                    }
                 }
+                .frame(width: axisWidth, height: 90, alignment: .topTrailing)
+                Canvas { context, size in
+                    guard let end = points.last?.time else { return }
+                    // y gridlines
+                    for gridValue in gridValues {
+                        let y = size.height - gridValue / maximum * size.height
+                        var line = Path()
+                        line.move(to: CGPoint(x: 0, y: y))
+                        line.addLine(to: CGPoint(x: size.width, y: y))
+                        context.stroke(line, with: .color(.primary.opacity(0.06)), lineWidth: 0.5)
+                    }
                 // CPU: dashed reference line at exactly one core
                 if !memory, maximum > 100 {
                     let y = size.height - 100 / maximum * size.height
@@ -138,8 +150,9 @@ struct HistoryChart: View {
                                  with: .color(lineColor))
                 }
             }
+            }
             .frame(height: 90)
-            // x-axis labels under the chart, aligned to the vertical gridlines
+            // x-axis labels under the chart, anchored to the gridline edges
             .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1, anchor: .leading) }
             .overlay(alignment: .bottom) { xLabel(xLabels[1].1) }
             .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1, anchor: .trailing) }
@@ -155,7 +168,6 @@ struct HistoryChart: View {
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .fixedSize()
-            .offset(y: 8)
             .frame(maxWidth: .infinity, alignment: anchor)
     }
 }
