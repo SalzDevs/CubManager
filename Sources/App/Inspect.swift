@@ -140,22 +140,23 @@ struct HistoryChart: View {
             }
             .frame(height: 90)
             // x-axis labels under the chart, aligned to the vertical gridlines
-            .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1) }
+            .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1, anchor: .leading) }
             .overlay(alignment: .bottom) { xLabel(xLabels[1].1) }
-            .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1) }
+            .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1, anchor: .trailing) }
             .padding(8).padding(.bottom, 16)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.035)))
             .accessibilityLabel("\(memory ? "Memory" : "CPU") history. Current \(currentValueText). Peak \(peakText). Gaps represent unavailable samples.")
         }
     }
 
-    private func xLabel(_ text: String) -> some View {
+    private func xLabel(_ text: String, anchor: Alignment = .center) -> some View {
         Text(text)
             .font(.system(size: 8))
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .fixedSize()
             .offset(y: 8)
+            .frame(maxWidth: .infinity, alignment: anchor)
     }
 }
 
