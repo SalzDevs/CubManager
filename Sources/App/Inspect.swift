@@ -152,11 +152,11 @@ struct HistoryChart: View {
             }
             }
             .frame(height: 90)
-            // x-axis labels under the chart, anchored to the gridline edges
+            // x-axis labels below the chart plot, pushed down out of the plot
             .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1, anchor: .leading) }
             .overlay(alignment: .bottom) { xLabel(xLabels[1].1) }
             .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1, anchor: .trailing) }
-            .padding(8).padding(.bottom, 16)
+            .padding(8).padding(.bottom, 26)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.035)))
             .accessibilityLabel("\(memory ? "Memory" : "CPU") history. Current \(currentValueText). Peak \(peakText). Gaps represent unavailable samples.")
         }
@@ -168,6 +168,7 @@ struct HistoryChart: View {
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .fixedSize()
+            .offset(y: 10)   // pushed down below the plot area
             .frame(maxWidth: .infinity, alignment: anchor)
     }
 }
