@@ -152,24 +152,34 @@ struct HistoryChart: View {
             }
             }
             .frame(height: 90)
-            // x-axis labels below the chart plot, pushed down out of the plot
-            .overlay(alignment: .bottomLeading) { xLabel(xLabels[0].1, anchor: .leading) }
-            .overlay(alignment: .bottom) { xLabel(xLabels[1].1) }
-            .overlay(alignment: .bottomTrailing) { xLabel(xLabels[2].1, anchor: .trailing) }
+            // x-axis labels below the chart: "−5m" right-aligned under the
+            // y-axis column (aligned with the 0/0 MiB label); the middle and
+            // "now" labels centered/trailing under the plot area itself.
+            .overlay(alignment: .bottom) {
+                HStack(alignment: .top, spacing: 5) {
+                    xLabel(xLabels[0].1)
+                        .frame(width: axisWidth, alignment: .trailing)
+                    HStack {
+                        xLabel(xLabels[1].1)
+                        Spacer()
+                        xLabel(xLabels[2].1)
+                    }
+                    .padding(.horizontal, 8)   // match the plot's inner padding
+                }
+                .offset(y: 10)
+            }
             .padding(8).padding(.bottom, 26)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.035)))
             .accessibilityLabel("\(memory ? "Memory" : "CPU") history. Current \(currentValueText). Peak \(peakText). Gaps represent unavailable samples.")
         }
     }
 
-    private func xLabel(_ text: String, anchor: Alignment = .center) -> some View {
+    private func xLabel(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 8))
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .fixedSize()
-            .offset(y: 10)   // pushed down below the plot area
-            .frame(maxWidth: .infinity, alignment: anchor)
     }
 }
 
